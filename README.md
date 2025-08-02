@@ -5,7 +5,26 @@
 
 
 
-## 1、 陪护人形机器人功能定位
+
+## 1、实现
+
+### 1.1 模拟环境搭建
+
+
+基于虚幻引擎的PR2机器人集成和调试
+
+
+语音识别、语音合成
+
+[语音](https://mp.weixin.qq.com/s?src=11&timestamp=1754125763&ver=6150&signature=6MJAq932niAOOc0qQSU0kuIulTwbkRstev6RvAM0Q*v*bGEZEINUcdtIN4zu23ZW71o0-GD1OB7DU7YjJcCqaWt6Iv63U4SKUIy1z1cK3khakAGz-BcQuDzPMdsJEK9P&new=1) 识别（方言、老人言： PaddleSpeech ）、DeepSeek大模型、流式语音合成 PP-TTS
+
+deepseek+在线科大讯飞语音识别 
+https://blog.csdn.net/qq_33215171/article/details/145630647
+
+
+
+
+## 2、 陪护人形机器人功能定位
 
 功能模块
 
@@ -26,24 +45,6 @@
 多媒体娱乐
 
 戏曲播放、健康课程等
-
-
-
-## 2、实现
-
-### 2.1 模拟环境搭建
-
-
-基于虚幻引擎的PR2机器人集成和调试
-
-
-[语音](https://mp.weixin.qq.com/s?src=11&timestamp=1754125763&ver=6150&signature=6MJAq932niAOOc0qQSU0kuIulTwbkRstev6RvAM0Q*v*bGEZEINUcdtIN4zu23ZW71o0-GD1OB7DU7YjJcCqaWt6Iv63U4SKUIy1z1cK3khakAGz-BcQuDzPMdsJEK9P&new=1) 识别（方言、老人言： PaddleSpeech ）、DeepSeek大模型、流式语音合成 PP-TTS
-
-deepseek+在线科大讯飞语音识别 
-https://blog.csdn.net/qq_33215171/article/details/145630647
-
-
-
 
 ## 3、分阶段目标
 

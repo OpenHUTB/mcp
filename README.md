@@ -10,11 +10,16 @@
 
 ### 1.1 模拟环境搭建
 
+* [机器人本体的仿真环境使用教程](https://kuavo.lejurobot.com/manual/basic_usage/kuavo-ros-control/docs/4%E5%BC%80%E5%8F%91%E6%8E%A5%E5%8F%A3/%E4%BB%BF%E7%9C%9F%E7%8E%AF%E5%A2%83%E4%BD%BF%E7%94%A8/) 
+* [机器人三维模型](https://gitee.com/OpenHUTB/kuavo-ros-opensource/tree/master/src/kuavo_assets/models)
+* 基于虚幻引擎的PR2机器人集成和调试（根据 [OpenSim](https://github.com/OpenHUTB/move) 建模）
 
-基于虚幻引擎的PR2机器人集成和调试（根据 OpenSim 建模）
 
-
+### 1.2 流程
 [语音](https://mp.weixin.qq.com/s?src=11&timestamp=1754125763&ver=6150&signature=6MJAq932niAOOc0qQSU0kuIulTwbkRstev6RvAM0Q*v*bGEZEINUcdtIN4zu23ZW71o0-GD1OB7DU7YjJcCqaWt6Iv63U4SKUIy1z1cK3khakAGz-BcQuDzPMdsJEK9P&new=1) 识别（方言、老人言： PaddleSpeech ）、DeepSeek大模型、流式语音合成 PP-TTS （控制机器人/模型）
+
+### 1.3 大模型
+
 
 
 

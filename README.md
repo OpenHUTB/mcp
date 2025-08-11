@@ -9,10 +9,9 @@
 ```mermaid
 graph LR
     A[用户] --> B[Web 界面：语音对话/键盘交互]
-    B --> C[FastMCP 工具层]
-    C --> D[HUTB API 客户端]
-    C --> D[Github API 客户端]
-    C --> F[Deepseek AI]
+    B --> C[FastMCP工具层]
+    C --> D[HUTB/Github API 客户端]
+    C --> E[Deepseek AI]
     
     style B fill:#e1f5fe
     style C fill:#ccffcc

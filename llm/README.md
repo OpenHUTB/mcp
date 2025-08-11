@@ -218,20 +218,6 @@ async def get_trending_repositories(language: Optional[str] = None,
 > 
 > **AI**: *使用 get_repository_details 工具查询*
 
-## 🏗️ 项目架构
-
-```mermaid
-graph LR
-    A[用户] --> B[Web界面：语音对话/键盘交互]
-    B --> C[FastMCP工具层]
-    C --> D[HUTB API 客户端]
-    C --> E[Deepseek AI]
-    
-    style B fill:#e1f5fe
-    style C fill:#ccffcc
-    style D fill:#fff3e0
-    style E fill:#f3e5f5
-```
 
 ### 核心组件
 

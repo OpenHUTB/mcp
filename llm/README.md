@@ -1,11 +1,11 @@
-# AI GitHub Assistant - 现代化GitHub智能助手
+# 人形陪护机器人智能助手
 
 [![FastMCP](https://img.shields.io/badge/FastMCP-Latest-brightgreen)](https://github.com/jlowin/fastmcp)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/wink-wink-wink555/ai-github-assistant?style=social)](https://github.com/wink-wink-wink555/ai-github-assistant)
 
-***基于FastMCP框架的现代化GitHub智能助手** - 装饰器驱动的MCP工具开发，体验前所未有的简洁和高效！*
+***基于FastMCP框架的智能助手** - 装饰器驱动的MCP工具开发，体验前所未有的简洁和高效！*
 
 ---
 
@@ -101,7 +101,13 @@ ai-github-assistant/
 ### 1. 安装依赖
 
 ```bash
+conda create -n companion python=3.10 --yes
+conda activate companion
 pip install -r requirements.txt
+# 退出虚拟环境
+# conda deactivate companion
+# 删除虚拟环境
+# conda remove -n companion --all --yes
 ```
 
 ### 2. 配置环境
@@ -118,13 +124,16 @@ cp config.env.example .env
 ### 3. 启动服务
 
 ```bash
-# 启动Web AI对话界面（默认推荐）
+# VS code 设置虚拟环境：Ctrl+Shift+P -> 选择 companion
+# 启动 Web AI 对话界面（默认推荐）
+# VS Code 运行：在 main_ai.py 中右键 -> Run Python -> Run Python File In Terminal
 python main_ai.py
+# 浏览器打开：http://localhost:3000
 
-# 或启动纯FastMCP服务器模式
+# 或启动纯 FastMCP 服务器模式
 python main_ai.py mcp
 
-# 或启动Web搜索界面
+# 或启动 Web 搜索界面
 python main_search.py
 ```
 
@@ -213,9 +222,9 @@ async def get_trending_repositories(language: Optional[str] = None,
 
 ```mermaid
 graph LR
-    A[用户] --> B[Web界面/AI对话]
+    A[用户] --> B[Web界面：语音对话/键盘交互]
     B --> C[FastMCP工具层]
-    C --> D[GitHub API客户端]
+    C --> D[HUTB API 客户端]
     C --> E[Deepseek AI]
     
     style B fill:#e1f5fe
@@ -244,7 +253,7 @@ graph LR
 ## 🔧 技术栈
 
 - **Framework**: FastMCP 0.9.0+
-- **Language**: Python 3.8+
+- **Language**: Python 3.10+
 - **Web**: FastAPI + Uvicorn
 - **AI**: Deepseek API
 - **HTTP**: aiohttp异步客户端
@@ -261,13 +270,13 @@ graph LR
 1. 访问 [GitHub Settings > Tokens](https://github.com/settings/tokens)
 2. 点击 "Generate new token (classic)"
 3. 选择必要权限（public_repo即可）
-4. 复制生成的token
+4. 复制生成的 token
 
 ### Deepseek API Key
 1. 访问 [Deepseek Platform](https://platform.deepseek.com/api_keys)
 2. 注册并登录账号
-3. 创建新的API密钥
-4. 复制API密钥
+3. 创建新的 API keys
+4. 复制 API keys
 
 ## 🌟 项目亮点
 
@@ -284,6 +293,18 @@ graph LR
 - 🐛 **Bug报告**: [创建Issue](https://github.com/wink-wink-wink555/ai-github-assistant/issues)
 - 💡 **功能建议**: [讨论想法](https://github.com/wink-wink-wink555/ai-github-assistant/discussions)
 - 🔧 **代码贡献**: 查看[贡献指南](CONTRIBUTING.md)
+
+## FAQ
+
+###### 网页提问时报错
+错误信息：
+```text
+Deepseek API调用失败: 402 - {"error":{"message":"Insufficient Balance","type":"unknown_error","param":null,"code":"invalid_request_error"}}
+```
+> 原因：API 调用是收费服务
+> 
+> 解决：到 [页面](https://platform.deepseek.com/top_up) 中进行充值。
+
 
 ## 📄 许可证
 

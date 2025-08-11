@@ -25,8 +25,8 @@ graph LR
 ### 1.1 模拟环境搭建
 
 * [机器人本体的仿真环境使用教程](https://kuavo.lejurobot.com/manual/basic_usage/kuavo-ros-control/docs/4%E5%BC%80%E5%8F%91%E6%8E%A5%E5%8F%A3/%E4%BB%BF%E7%9C%9F%E7%8E%AF%E5%A2%83%E4%BD%BF%E7%94%A8/) 
-* [机器人三维模型](https://gitee.com/OpenHUTB/kuavo-ros-opensource/tree/master/src/kuavo_assets/models)
-* 基于虚幻引擎的PR2机器人集成和调试（根据 [OpenSim](https://github.com/OpenHUTB/move) 建模）
+* [机器人本体三维模型](https://gitee.com/OpenHUTB/kuavo-ros-opensource/tree/master/src/kuavo_assets/models)
+* [基于虚幻引擎的PR2机器人集成和调试](sim/README.md)（根据 [OpenSim](https://github.com/OpenHUTB/move) 建模）
 
 
 ### 1.2 流程
@@ -100,4 +100,4 @@ graph LR
 
 * [基于FastMCP框架的 Github 助手](https://github.com/wink-wink-wink555/ai-github-assistant)
 
-
+* [carla-mcp](https://github.com/shikharvashistha/carla-mcp)

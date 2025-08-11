@@ -12,7 +12,7 @@ graph LR
     B --> C[FastMCP 工具层]
     C --> D[HUTB API 客户端]
     C --> D[Github API 客户端]
-    C --> E[Deepseek AI]
+    C --> F[Deepseek AI]
     
     style B fill:#e1f5fe
     style C fill:#ccffcc

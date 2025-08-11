@@ -1,0 +1,25 @@
+# FastMCP framework
+fastmcp>=0.9.0
+
+# GitHub API client
+PyGithub>=2.3.0
+requests>=2.31.0
+
+# Server framework
+fastapi>=0.104.1
+uvicorn>=0.24.0
+
+# Environment variables management
+python-dotenv>=1.0.0
+
+# Data processing
+pandas>=2.1.0
+
+# Async HTTP client
+aiohttp>=3.9.0
+
+# Logging library
+loguru>=0.7.2
+
+# Type hints support
+typing-extensions>=4.8.0 

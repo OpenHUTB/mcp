@@ -81,5 +81,8 @@
 下半年任务：实现规模化推广，实现首批量产300台的任务（故障率不高于5%）。
 
 
+## 参考
+
+* [基于FastMCP框架的 Github 助手](https://github.com/wink-wink-wink555/ai-github-assistant)
 
 

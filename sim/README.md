@@ -1,22 +1,26 @@
-# CarlaMCP - Carla Model Context Protocol Integration
+# HutbMCP - Unreal 模型上下文协议集成
 
-##### Call for Proposals for Fetures 🚨❗️: Kindly create an issue with your proposal to have discussion/implementation.
+## 概述
 
-## Overview
-CarlaMCP is a Python package that provides an interface for integrating Carla with the Model Context Protocol (MCP). It allows users to interact with Carla's simulation environment and manage model contexts using MCP. The package is designed to facilitate the development of autonomous driving applications by providing a seamless connection between Carla and MCP.
+HutbMCP 是一个 Python 软件包，提供将 Hutb 与模型上下文协议 (Model Context Protocol, MCP) 集成的接口。它允许用户与 Hutb 的仿真环境交互，并使用 MCP 管理模型上下文。该软件包旨在通过在 Hutb 和 MCP 之间提供无缝连接来促进机器人应用程序的开发。
 
-## Features
-- [x] Integration with Carla simulation environment
-- [x] Support for Model Context Protocol (MCP)
-- [x] Easy-to-use API for managing model contexts
-- [ ] Support for various Carla sensors and actors
-- [ ] Ability to run simulations and collect data
 
-## Installation
-To install CarlaMCP, you can use uv. Make sure you have Python 3.10 or higher installed.
+## 特性
+- [x] 与 Hutb 仿真环境集成
+- [x] 支持模型上下文协议 (MCP)
+- [x] 用于管理模型上下文的易于使用的 API
+- [ ] 支持各种 Hutb 传感器和参与者
+- [ ] 运行模拟和收集数据的能力
+
+
+## 安装
+
+要安装 HutbMCP，您可以使用 uv。请确保您已安装 Python 3.10 或更高版本。
 
 ```bash
-uv run main.py
+pip install D:/hutb/PythonAPI/carla/dist/hutb-2.9.16-cp310-cp310-win_amd64.whl
+# 启动 WindowsNoEditor/CarlaUE4.exe
+python main.py
 ```
 
-#### Alert ⚠️: This project is at initial stage and want contributors to help in development.
+#### 警告 ⚠️：该项目处于初始阶段，希望贡献者帮助开发。

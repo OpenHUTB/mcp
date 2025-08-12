@@ -166,7 +166,6 @@ async def server_lifespan(server: FastMCP) -> AsyncIterator[Dict[str, Any]]:
 
 mcp = FastMCP(
     "CarlaMCP",
-    description="Carla integration through the Model Context Protocol",
     lifespan=server_lifespan
 )
 

@@ -101,3 +101,5 @@ graph LR
 * [基于FastMCP框架的 Github 助手](https://github.com/wink-wink-wink555/ai-github-assistant)
 
 * [carla-mcp](https://github.com/shikharvashistha/carla-mcp)
+
+* [网易云音乐 MCP 控制器](https://modelscope.cn/mcp/servers/lixiande/CloudMusic_Auto_Player)

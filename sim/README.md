@@ -24,3 +24,7 @@ python main.py
 ```
 
 #### 警告 ⚠️：该项目处于初始阶段，希望贡献者帮助开发。
+
+## 参考
+
+* [MuJoCo-Unreal-Engine-Plugin](https://github.com/oneclicklabs/MuJoCo-Unreal-Engine-Plugin) ，其他 [使用 ROS 与 WebSockets 连接实现机器人可视化的 Unreal 插件](https://github.com/HoangGiang93/URoboViz)

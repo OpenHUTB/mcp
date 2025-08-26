@@ -20,6 +20,7 @@ jobs:
 
       - name: Setup
         run: |
+          sudo apt-get install --reinstall libgl1-mesa-dri libgl1-mesa-glx libglx-mesa0 mesa-utils
           # https://gist.github.com/saratrajput/60b1310fe9d9df664f9983b38b50d5da?permalink_comment_id=4736553
           wget -P . https://github.com/google-deepmind/mujoco/releases/download/3.3.5/mujoco-3.3.5-linux-x86_64.tar.gz
           mkdir ~/.mujoco
@@ -32,6 +33,7 @@ jobs:
           source ~/.bashrc
           # Test that the library is installed.
           cd ~/.mujoco/mujoco-3.3.5/bin
+          # ssh is not GUI: ERROR: could not initialize GLFW
           ./simulate ../model/humanoid/humanoid.xml
           echo "Finish!"
 

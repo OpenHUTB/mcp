@@ -24,4 +24,14 @@ jobs:
           wget https://github.com/google-deepmind/mujoco/releases/download/3.3.5/mujoco-3.3.5-linux-x86_64.tar.gz .
           mkdir ~/.mujoco
           tar -xvf mujoco-3.3.5-linux-x86_64.tar.gz -C ~/.mujoco/
+          # 
+          echo -e 'export LD_LIBRARY_PATH=~/.mujoco/mujoco210/bin 
+          export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/nvidia 
+          export PATH="$LD_LIBRARY_PATH:$PATH" 
+          export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libGLEW.so' >> ~/.bashrc
+          source ~/.bashrc
+          # Test that the library is installed.
+          cd ~/.mujoco/mujoco-3.3.5/bin
+          ./simulate ../model/humanoid/humanoid.xml
+          echo "Finish!"
 

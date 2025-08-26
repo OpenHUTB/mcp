@@ -34,13 +34,17 @@ git clone https://gitee.com/leju-robot/kuavo-ros-opensource.git
 
 官方提供了一个方便的脚本来安装docker，只需要运行以下命令即可：
 
+```
 ./install_docker.sh
+```
 
 #### 1.1.3 构建容器镜像
 
 根据Dockerfile文件构建容器镜像，运行以下命令：
 
+```
 ./build.sh
+```
 
 若上诉指令运行失败，可以按照以下步骤自行下载导入(推荐)
 
@@ -48,7 +52,9 @@ git clone https://gitee.com/leju-robot/kuavo-ros-opensource.git
 
 导入镜像：
 
+```
 docker load -i kuavo_opensource_mpc_wbc_img_v0.6.1.tar.gz
+```
 
 #### 1.1.4 运行容器
 
@@ -56,31 +62,37 @@ docker load -i kuavo_opensource_mpc_wbc_img_v0.6.1.tar.gz
 
 (推荐)普通运行(cpu)，没有GPU或者没有配置好nvidia-container-toolkit的机器，运行以下命令：
 
+```
 ./run.sh
+```
 
 运行GPU版本，需要配置好nvidia-container-toolkit和nvidia-runtime等环境变量，可以在带GPU的宿主机上mujoco、gazebo等仿真更流畅
 
+```
 ./run_with_gpu.sh
+```
 
 ##### 1.1.5 编译
 
 执行./run.sh进入容器后，默认在仓库的映射目录/root/kuavo_ws，执行以下命令开始编译：
 
-catkin config -DCMAKE_ASM_COMPILER=/usr/bin/as -DCMAKE_BUILD_TYPE=Release # Important! #
--DCMAKE_ASM_COMPILER=/usr/bin/as 为配置了ccache必要操作，否则可能出现找不到编译器的情况
+```
+catkin config -DCMAKE_ASM_COMPILER=/usr/bin/as -DCMAKE_BUILD_TYPE=Release # Important! #-DCMAKE_ASM_COMPILER=/usr/bin/as 为配置了ccache必要操作，否则可能出现找不到编译器的情况
 
 source installed/setup.bash # 加载一些已经安装的ROS包依赖环境，包括硬件包等
 
 catkin build humanoid_controllers #会编译所有依赖项
+```
 
 #### 1.1.6 仿真运行
 
 使用mujoco仿真器
 
+```
 source devel/setup.bash # 如果使用zsh，则使用source devel/setup.zsh
 
 roslaunch humanoid_controllers load_kuavo_mujoco_sim.launch # 启动控制器、mpc、wbc、mujoco仿真器
-
+```
 
 
 ### 1.2 流程

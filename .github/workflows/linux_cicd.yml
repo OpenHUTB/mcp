@@ -21,7 +21,7 @@ jobs:
       - name: Setup
         run: |
           # https://gist.github.com/saratrajput/60b1310fe9d9df664f9983b38b50d5da?permalink_comment_id=4736553
-          wget https://github.com/google-deepmind/mujoco/releases/download/3.3.5/mujoco-3.3.5-linux-x86_64.tar.gz .
+          wget -P . https://github.com/google-deepmind/mujoco/releases/download/3.3.5/mujoco-3.3.5-linux-x86_64.tar.gz
           mkdir ~/.mujoco
           tar -xvf mujoco-3.3.5-linux-x86_64.tar.gz -C ~/.mujoco/
           # 

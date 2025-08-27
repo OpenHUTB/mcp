@@ -1,0 +1,41 @@
+name: Test in Ubuntu
+
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-22.04]
+
+    steps:
+      - name: Checkout 
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - run: |
+          pip install -r llm/requirements.txt
+          python llm/main_ai.py
+
+      - name: Setup
+        run: |
+          # https://gist.github.com/saratrajput/60b1310fe9d9df664f9983b38b50d5da?permalink_comment_id=4736553
+          wget -P . https://github.com/google-deepmind/mujoco/releases/download/3.3.5/mujoco-3.3.5-linux-x86_64.tar.gz
+          mkdir ~/.mujoco
+          tar -xvf mujoco-3.3.5-linux-x86_64.tar.gz -C ~/.mujoco/
+          # 
+          echo -e 'export LD_LIBRARY_PATH=~/.mujoco/mujoco-3.3.5/bin
+          export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/usr/lib/nvidia 
+          export PATH="$LD_LIBRARY_PATH:$PATH" 
+          export LD_PRELOAD=/usr/lib/x86_64-linux-gnu/libGLEW.so' >> ~/.bashrc
+          source ~/.bashrc
+          # Test that the library is installed.
+          cd ~/.mujoco/mujoco-3.3.5/bin
+          # ssh is not GUI: ERROR: could not initialize GLFW
+          # ./simulate ../model/humanoid/humanoid.xml
+          echo "Finish!"
+

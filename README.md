@@ -27,7 +27,7 @@ graph LR
 #### 1.1.1 克隆仓库
 
 使用指令
-git clone https://gitee.com/leju-robot/kuavo-ros-opensource.git
+`git clone https://gitee.com/leju-robot/kuavo-ros-opensource.git`
 克隆官方仓库。
 
 #### 1.1.2 安装docker
@@ -74,7 +74,7 @@ docker load -i kuavo_opensource_mpc_wbc_img_v0.6.1.tar.gz
 
 ##### 1.1.5 编译
 
-执行./run.sh进入容器后，默认在仓库的映射目录/root/kuavo_ws，执行以下命令开始编译：
+执行`./run.sh`进入容器后，默认在仓库的映射目录/root/kuavo_ws，执行以下命令开始编译：
 
 ```
 catkin config -DCMAKE_ASM_COMPILER=/usr/bin/as -DCMAKE_BUILD_TYPE=Release # Important! #-DCMAKE_ASM_COMPILER=/usr/bin/as 为配置了ccache必要操作，否则可能出现找不到编译器的情况
@@ -94,6 +94,12 @@ source devel/setup.bash # 如果使用zsh，则使用source devel/setup.zsh
 roslaunch humanoid_controllers load_kuavo_mujoco_sim.launch # 启动控制器、mpc、wbc、mujoco仿真器
 ```
 
+### 上诉所有操作默认ubuntu环境
+
+#### 1.1.7 手动导入人形机器人模型（windows环境可选）：
+
+* 下载并解压 [MuJoCo](https://github.com/google-deepmind/mujoco/releases) ；
+* 运行`simulate.exe model/biped_s100049/xml/scene.xml`
 
 ### 1.2 流程
 [语音](https://mp.weixin.qq.com/s?src=11&timestamp=1754125763&ver=6150&signature=6MJAq932niAOOc0qQSU0kuIulTwbkRstev6RvAM0Q*v*bGEZEINUcdtIN4zu23ZW71o0-GD1OB7DU7YjJcCqaWt6Iv63U4SKUIy1z1cK3khakAGz-BcQuDzPMdsJEK9P&new=1) 识别（方言、老人言： PaddleSpeech ）、DeepSeek大模型、流式语音合成 PP-TTS （控制机器人/模型）

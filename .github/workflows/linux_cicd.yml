@@ -18,8 +18,8 @@ jobs:
         with:
           python-version: '3.10'
       - run: |
-        pip install -r llm/requirements.txt
-        python llm/main_ai.py
+          pip install -r llm/requirements.txt
+          python llm/main_ai.py
 
       - name: Setup
         run: |

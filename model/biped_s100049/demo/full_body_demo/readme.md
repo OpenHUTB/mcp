@@ -62,6 +62,9 @@ roslaunch humanoid_controllers load_kuavo_real.launch
    source devel/setup.bash
    python3 ./src/demo/full_body_demo/scripts/timed_action_executor.py
    ```
+
+   ！！！注意，这里的太极由于有单脚站立的动作，会导致机器人摔倒，所以无法完整运行，其余动作均可完整运行。
+
    - 单独启动各段动作,
    ```bash
    source devel/setup.bash

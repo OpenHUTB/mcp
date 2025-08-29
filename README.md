@@ -8,9 +8,9 @@
 
 ```mermaid
 graph LR
-    A[用户] --> B[Web 界面：语音对话/键盘交互]
-    B --> C[FastMCP工具层]
-    C --> D[HUTB/Github API 客户端]
+    A[用户] --> B[人机界面：语音对话/键盘交互]
+    B --> C[FastMCP 工具层]
+    C --> D[模拟器/物理机 API 客户端]
     C --> E[Deepseek AI]
     
     style B fill:#e1f5fe
@@ -22,7 +22,7 @@ graph LR
 
 ## 1、实现
 
-### 1.1 模拟环境搭建
+### 1.1 模拟器的环境搭建
 
 #### 1.1.1 克隆仓库
 
@@ -89,7 +89,7 @@ catkin build humanoid_controllers #会编译所有依赖项
 
 #### 1.1.6 仿真运行
 
-使用mujoco仿真器
+使用 mujoco 仿真器
 
 ```
 source devel/setup.bash # 如果使用zsh，则使用source devel/setup.zsh
@@ -97,20 +97,21 @@ source devel/setup.bash # 如果使用zsh，则使用source devel/setup.zsh
 roslaunch humanoid_controllers load_kuavo_mujoco_sim.launch # 启动控制器、mpc、wbc、mujoco仿真器
 ```
 
-### 上诉所有操作默认ubuntu环境
+**上述所有操作默认ubuntu环境**
 
 #### 1.1.7 手动导入人形机器人模型（windows环境可选）：
 
 * 下载并解压 [MuJoCo](https://github.com/google-deepmind/mujoco/releases) ；
 * 运行`simulate.exe model/biped_s100049/xml/scene.xml`
 
-### 1.2 流程
-[语音](https://mp.weixin.qq.com/s?src=11&timestamp=1754125763&ver=6150&signature=6MJAq932niAOOc0qQSU0kuIulTwbkRstev6RvAM0Q*v*bGEZEINUcdtIN4zu23ZW71o0-GD1OB7DU7YjJcCqaWt6Iv63U4SKUIy1z1cK3khakAGz-BcQuDzPMdsJEK9P&new=1) 识别（方言、老人言： PaddleSpeech ）、DeepSeek大模型、流式语音合成 PP-TTS （控制机器人/模型）
 
-### 1.3 大模型
+### 1.2 大模型
 
 [基于FastMCP框架的人形陪护机器人智能助手](llm/README.md) 。
 
+
+### 1.3 流程
+加上语音识别和合成的整个工作流依次包括：[麦克风](https://item.m.jd.com/product/100025694525.html) /Web浏览器、 [语音](https://mp.weixin.qq.com/s?src=11&timestamp=1754125763&ver=6150&signature=6MJAq932niAOOc0qQSU0kuIulTwbkRstev6RvAM0Q*v*bGEZEINUcdtIN4zu23ZW71o0-GD1OB7DU7YjJcCqaWt6Iv63U4SKUIy1z1cK3khakAGz-BcQuDzPMdsJEK9P&new=1) 识别（方言、老人言： PaddleSpeech ）、QWen/DeepSeek 大模型、流式语音合成 PP-TTS （语音播报/控制模拟器的模型或实体机器人）。
 
 
 

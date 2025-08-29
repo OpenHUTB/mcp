@@ -1,0 +1,57 @@
+action_sequence:
+  # 时间点（秒）: 动作配置, 时间点不能重合
+  -1.0:  # 手势舞
+    remap_joy: false
+    type: "function"  
+    command: "play_gesture_dance"  # 函数名
+    params:
+      csv_file: "./src/demo/full_body_demo/motions/rbd_state_motions1.csv"  # 参数
+      time_offset: 0.0  # 动作开始时间偏移（秒）
+  60.1: # 重置手臂
+    remap_joy: true
+    type: "function"
+    command: "change_arm_mode:1"
+  60.0: # 行走重置
+    remap_joy: true
+    type: "function"
+    command: "walk_and_reset"
+  65.0: # 正常站立重置
+    remap_joy: false
+    type: "function"
+    command: "stance_and_reset"
+  68.0: # 太极
+    remap_joy: false
+    type: "function"  
+    command: "play_taichi"  # 函数名
+    params:
+      csv_file: "src/demo/csv2body_demo/actions/taiji_wuhan_step_part.csv"  # 参数
+      time_offset: 0.0  # 动作开始时间偏移（秒）
+  144.0:
+    remap_joy: true
+    type: "function"
+    command: "walk_and_reset" 
+  144.1: # 重置手臂
+    remap_joy: true
+    type: "function"
+    command: "change_arm_mode:1"
+  154.0: # 正常站立重置
+    remap_joy: false
+    type: "function"
+    command: "stance_and_reset"
+  155.0: # 跳舞
+    remap_joy: false
+    type: "function"  
+    command: "play_dance"  # 函数名
+    params:
+      csv_file: "./src/demo/full_body_demo/motions/rbd_states_0314_5deg_ik_8_full.csv"  # 参数
+      time_offset: 0.0  # 动作开始时间偏移（秒）
+  240.0: # 等待结束
+    remap_joy: false
+    type: "shell"  # shell命令类型
+    command: "echo action_sequence finished"  # shell命令
+ 
+
+# joy topic重映射配置
+joy_remap:
+  input_topic: "/joy"
+  remapped_topic: "/joy_remap" 

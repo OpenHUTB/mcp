@@ -89,7 +89,7 @@ catkin build humanoid_controllers #会编译所有依赖项
 
 #### 1.1.6 仿真运行
 
-使用mujoco仿真器
+使用 mujoco 仿真器
 
 ```
 source devel/setup.bash # 如果使用zsh，则使用source devel/setup.zsh
@@ -97,20 +97,21 @@ source devel/setup.bash # 如果使用zsh，则使用source devel/setup.zsh
 roslaunch humanoid_controllers load_kuavo_mujoco_sim.launch # 启动控制器、mpc、wbc、mujoco仿真器
 ```
 
-### 上诉所有操作默认ubuntu环境
+**上述所有操作默认ubuntu环境**
 
 #### 1.1.7 手动导入人形机器人模型（windows环境可选）：
 
 * 下载并解压 [MuJoCo](https://github.com/google-deepmind/mujoco/releases) ；
 * 运行`simulate.exe model/biped_s100049/xml/scene.xml`
 
-### 1.2 流程
-[语音](https://mp.weixin.qq.com/s?src=11&timestamp=1754125763&ver=6150&signature=6MJAq932niAOOc0qQSU0kuIulTwbkRstev6RvAM0Q*v*bGEZEINUcdtIN4zu23ZW71o0-GD1OB7DU7YjJcCqaWt6Iv63U4SKUIy1z1cK3khakAGz-BcQuDzPMdsJEK9P&new=1) 识别（方言、老人言： PaddleSpeech ）、DeepSeek大模型、流式语音合成 PP-TTS （控制机器人/模型）
 
-### 1.3 大模型
+### 1.2 大模型
 
 [基于FastMCP框架的人形陪护机器人智能助手](llm/README.md) 。
 
+
+### 1.3 流程
+[语音](https://mp.weixin.qq.com/s?src=11&timestamp=1754125763&ver=6150&signature=6MJAq932niAOOc0qQSU0kuIulTwbkRstev6RvAM0Q*v*bGEZEINUcdtIN4zu23ZW71o0-GD1OB7DU7YjJcCqaWt6Iv63U4SKUIy1z1cK3khakAGz-BcQuDzPMdsJEK9P&new=1) 识别（方言、老人言： PaddleSpeech ）、DeepSeek大模型、流式语音合成 PP-TTS （控制机器人/模型）
 
 
 

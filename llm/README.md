@@ -1,4 +1,4 @@
-# 人形陪护机器人智能助手
+# 人形机器人智能助手
 
 [![FastMCP](https://img.shields.io/badge/FastMCP-Latest-brightgreen)](https://github.com/jlowin/fastmcp)
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue)](https://python.org)

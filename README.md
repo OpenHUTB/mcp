@@ -1,6 +1,6 @@
 # HUTB 的 MCP 实现
 
-实现和具身人、无人车、无人机的大模型交互。
+基于 MCP 实现和具身人、无人车、无人机的大模型交互。
 
 
 ## 🏗️ 项目架构
@@ -106,7 +106,7 @@ roslaunch humanoid_controllers load_kuavo_mujoco_sim.launch # 启动控制器、
 
 ### 1.2 大模型
 
-[基于FastMCP框架的人形陪护机器人智能助手](llm/README.md) 。
+[基于FastMCP框架的人形机器人智能助手](llm/README.md) 。
 
 
 ### 1.3 流程

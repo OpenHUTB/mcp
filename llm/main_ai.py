@@ -1361,14 +1361,14 @@ def get_web_interface():
     <body>
         <div class="container">
             <div class="header">
-                <h1>🚀 人形陪护机器人智能助手</h1>
+                <h1>🚀 人形机器人智能助手</h1>
             </div>
 
             <div class="chat-container">
                 <div class="messages" id="messages">
                     <div class="example-questions">
                         <div class="welcome-message">
-                            👋 欢迎使用基于FastMCP框架的人形陪护机器人智能助手！集成GitHub搜索 + CARLA仿真控制。
+                            👋 欢迎使用基于FastMCP框架的人形机器人智能助手！集成GitHub搜索 + CARLA仿真控制。
                             <br><br>
                             🔧 <strong>技术特色</strong>：本助手使用FastMCP装饰器实现工具定义，提供类型安全、自动化的MCP体验！
                         </div>
@@ -1403,7 +1403,7 @@ def get_web_interface():
                     <textarea 
                         id="messageInput" 
                         class="message-input" 
-                        placeholder="问我任何人形陪护机器人相关问题，我会使用FastMCP工具来帮你搜索..."
+                        placeholder="问我任何人形机器人相关问题，我会使用FastMCP工具来帮你搜索..."
                         rows="2"
                         onkeydown="handleKeyPress(event)"
                     ></textarea>

@@ -1,4 +1,4 @@
-# HUTB 的 MCP 实现
+# HUTB 模拟器的 MCP 实现
 
 基于 MCP 实现和具身人、无人车、无人机的大模型交互。
 
@@ -19,9 +19,7 @@ graph LR
 ```
 
 
-## 1、实现
-
-## 部署
+## 1. 部署运行
 
 **运行推荐的软硬件**
 
@@ -34,21 +32,22 @@ graph LR
 
 
 
+## 2. 实现
 
-### 1.1 大模型
+### 2.1 大模型
 
 [基于FastMCP框架的 HUTB 智能助手](llm/README.md) 。
 
 ![](./llm/screenshots/hutb_control.png)
 
 
-### 1.2 流程
-加上语音识别和合成的整个工作流依次包括：[麦克风](https://item.m.jd.com/product/100025694525.html) /Web浏览器、 [语音](https://mp.weixin.qq.com/s?src=11&timestamp=1754125763&ver=6150&signature=6MJAq932niAOOc0qQSU0kuIulTwbkRstev6RvAM0Q*v*bGEZEINUcdtIN4zu23ZW71o0-GD1OB7DU7YjJcCqaWt6Iv63U4SKUIy1z1cK3khakAGz-BcQuDzPMdsJEK9P&new=1) 识别（方言、老人言： PaddleSpeech ）、QWen/DeepSeek 大模型、流式语音合成 PP-TTS （语音播报/控制模拟器的模型或实体机器人）。
+### 2.2 交互增强
+（待实现）加上语音识别和合成的整个工作流依次包括：[麦克风](https://item.m.jd.com/product/100025694525.html) /Web浏览器、 [语音](https://mp.weixin.qq.com/s?src=11&timestamp=1754125763&ver=6150&signature=6MJAq932niAOOc0qQSU0kuIulTwbkRstev6RvAM0Q*v*bGEZEINUcdtIN4zu23ZW71o0-GD1OB7DU7YjJcCqaWt6Iv63U4SKUIy1z1cK3khakAGz-BcQuDzPMdsJEK9P&new=1) 识别（方言、老人言： PaddleSpeech ）、QWen/DeepSeek 大模型、流式语音合成 PP-TTS （语音播报/控制模拟器的模型或实体机器人）。
 
-### 1.3 其他：[人形机器人模拟环境搭建](./model/humanoid.md)
+### 2.3 其他：[人形机器人模拟环境搭建](./model/humanoid.md)
 
 
-## 参考
+## 3. 参考
 
 * [基于FastMCP框架的 Github 助手](https://github.com/wink-wink-wink555/ai-github-assistant)
 

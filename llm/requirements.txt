@@ -24,4 +24,4 @@ loguru>=0.7.2
 # Type hints support
 typing-extensions>=4.8.0 
 
-hutb
+carla==0.9.16

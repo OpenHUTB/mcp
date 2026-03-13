@@ -205,4 +205,3 @@ settings.synchronous_mode = False
 settings.no_rendering_mode = False
 settings.fixed_delta_seconds = None
 world.apply_settings(settings)
-

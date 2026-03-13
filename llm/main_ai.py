@@ -1091,8 +1091,136 @@ class FastMCPGitHubAssistant:
                 "error": str(e)
             }
 
+    # 定义车辆和行人的类型信息
+    VEHICLE_TYPES = {
+        "model3": "Tesla Model 3",
+        "a2": "Audi A2",
+        "etron": "Audi e-tron",
+        "tt": "Audi TT",
+        "grandtourer": "BMW Grand Tourer",
+        "i8": "BMW i8",
+        "mini": "BMW Mini",
+        "impala": "Chevrolet Impala",
+        "c3": "Citroen C3",
+        "charger_police": "Dodge Charger Police",
+        "charger2020": "Dodge Charger 2020",
+        "mustang": "Ford Mustang",
+        "crown": "Ford Crown",
+        "wrangler_rubicon": "Jeep Wrangler Rubicon",
+        "mkz_2017": "Lincoln MKZ 2017",
+        "mkz_2020": "Lincoln MKZ 2020",
+        "benz_coupe": "Mercedes-Benz Coupe",
+        "cabrio": "Mercedes-Benz Cabrio",
+        "ccc": "Mercedes-Benz CCC",
+        "cooper_s": "Mini Cooper S",
+        "micra": "Nissan Micra",
+        "patrol": "Nissan Patrol",
+        "leon": "Seat Leon",
+        "t2": "Volkswagen T2",
+        "t3": "Volkswagen T3"
+    }
+
+    PEDESTRIAN_TYPES = {
+        "pedestrian": "普通行人",
+        "elderly": "老年人",
+        "child": "儿童",
+        "construction_worker": "建筑工人",
+        "police": "警察",
+        "business": "商务人士",
+        "jogger": "慢跑者"
+    }
+
+    def _check_spawn_intent(self, message):
+        """检测用户是否有生成车辆或行人的意图，但缺少必要参数
+
+        只有当缺少类型时才询问，数量默认为1，不询问
+        """
+        message = message.lower()
+
+        # 车辆相关关键词
+        vehicle_keywords = ['车', '车辆', '汽车', '生成车', '创建车', '来车', '加车', '添加车辆']
+        # 行人相关关键词
+        pedestrian_keywords = ['行人', '人', '生成行人', '创建行人', '来人', '加人', '添加行人', '路人']
+
+        # 数量相关模式
+        import re
+        has_count = bool(re.search(r'\d+\s*[辆个]', message))
+
+        # 检测车辆类型
+        has_vehicle_type = any(vtype in message for vtype in self.VEHICLE_TYPES.keys())
+        # 检测行人类型
+        has_pedestrian_type = any(ptype in message for ptype in self.PEDESTRIAN_TYPES.keys())
+
+        # 检查是否是模糊的车辆生成请求
+        is_vehicle_request = any(kw in message for kw in vehicle_keywords)
+        # 检查是否是模糊的行人生成请求
+        is_pedestrian_request = any(kw in message for kw in pedestrian_keywords)
+
+        result = {
+            'needs_vehicle_type': False,
+            'needs_vehicle_count': False,
+            'needs_pedestrian_type': False,
+            'needs_pedestrian_count': False,
+            'is_ambiguous': False
+        }
+
+        # 如果是车辆请求但没有指定类型，需要询问
+        if is_vehicle_request and not has_vehicle_type:
+            result['needs_vehicle_type'] = True
+            result['needs_vehicle_count'] = not has_count  # 记录是否也缺少数量
+            result['is_ambiguous'] = True
+
+        # 如果是行人请求但没有指定类型，需要询问
+        if is_pedestrian_request and not has_pedestrian_type:
+            result['needs_pedestrian_type'] = True
+            result['needs_pedestrian_count'] = not has_count  # 记录是否也缺少数量
+            result['is_ambiguous'] = True
+
+        return result
+
+    def _generate_spawn_prompt(self, check_result):
+        """生成参数询问提示"""
+        prompt_parts = []
+
+        if check_result['needs_vehicle_type']:
+            vehicle_list = "\n".join([f"  • {key} - {name}" for key, name in self.VEHICLE_TYPES.items()])
+            prompt_parts.append(f"🚗 **可用车辆类型：**\n{vehicle_list}")
+
+        if check_result['needs_vehicle_count']:
+            prompt_parts.append("🚗 **车辆数量：** 支持生成 1-100+ 辆车（取决于地图可用生成点数量）")
+
+        if check_result['needs_pedestrian_type']:
+            pedestrian_list = "\n".join([f"  • {key} - {name}" for key, name in self.PEDESTRIAN_TYPES.items()])
+            prompt_parts.append(f"🚶 **可用行人类型：**\n{pedestrian_list}")
+
+        if check_result['needs_pedestrian_count']:
+            prompt_parts.append("🚶 **行人数量：** 支持生成 1-100+ 个行人（取决于地图大小）")
+
+        if prompt_parts:
+            prompt_parts.insert(0, "请提供以下信息以完成生成：\n")
+            prompt_parts.append("\n💡 **示例指令：**")
+            if check_result['needs_vehicle_type'] or check_result['needs_vehicle_count']:
+                prompt_parts.append('  • "生成5辆model3"')
+                prompt_parts.append('  • "来10辆mustang"')
+            if check_result['needs_pedestrian_type'] or check_result['needs_pedestrian_count']:
+                prompt_parts.append('  • "生成3个police"')
+                prompt_parts.append('  • "来5个pedestrian"')
+
+        return "\n\n".join(prompt_parts)
+
     async def chat(self, user_message):
         """处理聊天请求 - 使用FastMCP工具的AI对话"""
+
+        # 检查是否有生成意图但缺少参数
+        spawn_check = self._check_spawn_intent(user_message)
+        if spawn_check['is_ambiguous']:
+            prompt = self._generate_spawn_prompt(spawn_check)
+            return {
+                "message": self.process_markdown(prompt),
+                "tool_calls": None,
+                "conversation": [{"role": "user", "content": user_message}]
+            }
+
         # 初始消息
         messages = [
             {

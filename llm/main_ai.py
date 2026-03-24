@@ -483,6 +483,38 @@ class CarlaClient:
                 await self.start_tick_loop()
                 app_logger.info("🔄 已启动后台tick循环，行人将开始移动")
             
+            # 再次确保所有行人控制器都有目标位置
+            if spawned_pedestrians:
+                import asyncio
+                await asyncio.sleep(0.5)  # 等待一小段时间让控制器初始化
+                for pedestrian in spawned_pedestrians:
+                    try:
+                        # 获取行人的控制器
+                        controller = pedestrian.get_control()
+                        if controller:
+                            # 重新设置随机目标位置
+                            target_location = self.world.get_random_location_from_navigation()
+                            if target_location:
+                                # 通过walker的controller来设置目标
+                                walker_controller = None
+                                for actor in self.world.get_actors():
+                                    if 'controller.ai.walker' in actor.type_id:
+                                        # 检查这个控制器是否附着到当前行人
+                                        try:
+                                            if hasattr(actor, 'parent') and actor.parent == pedestrian:
+                                                walker_controller = actor
+                                                break
+                                        except:
+                                            pass
+                                
+                                if walker_controller:
+                                    walker_controller.go_to_location(target_location)
+                                    walker_controller.set_max_speed(1.4 + (0.5 - 1.0))  # 随机速度 0.9-1.9 m/s
+                                    app_logger.info(f"🚶 为行人 {pedestrian.id} 重新设置目标位置和速度")
+                    except Exception as e:
+                        app_logger.warning(f"⚠️ 为行人设置目标时出错: {e}")
+                        continue
+            
             return spawned_pedestrians
             
         except Exception as e:
@@ -697,10 +729,10 @@ async def spawn_pedestrian_impl(query: str, count: int = 1, **kwargs) -> str:
     pedestrians = await carla_client.spawn_pedestrians(query, count=count)
     if pedestrians:
         if len(pedestrians) == 1:
-            return f"✅ 已生成1个{query}行人 (ID: {pedestrians[0].id})"
+            return f"✅ 已生成1个{query}行人 (ID: {pedestrians[0].id})，行人已开始自动行走"
         else:
             last_pedestrian = pedestrians[-1]
-            return f"✅ 已生成{len(pedestrians)}个{query}行人，最后一个行人ID: {last_pedestrian.id}"
+            return f"✅ 已生成{len(pedestrians)}个{query}行人，最后一个行人ID: {last_pedestrian.id}，所有行人已开始自动行走"
     return "❌ 行人生成失败，请确保CARLA服务器已连接且地图有可用导航点"
 
 
@@ -1120,6 +1152,90 @@ class FastMCPGitHubAssistant:
         "t3": "Volkswagen T3"
     }
 
+    # 车辆中文到英文的映射
+    VEHICLE_TYPE_MAP = {
+        # Tesla
+        "特斯拉": "model3",
+        "特斯拉model3": "model3",
+        "model3": "model3",
+        # Audi
+        "奥迪": "a2",
+        "奥迪a2": "a2",
+        "a2": "a2",
+        "奥迪etron": "etron",
+        "etron": "etron",
+        "奥迪tt": "tt",
+        "tt": "tt",
+        # BMW
+        "宝马": "grandtourer",
+        "宝马grandtourer": "grandtourer",
+        "grandtourer": "grandtourer",
+        "宝马i8": "i8",
+        "i8": "i8",
+        "宝马mini": "mini",
+        "mini": "mini",
+        # Chevrolet
+        "雪佛兰": "impala",
+        "雪佛兰impala": "impala",
+        "impala": "impala",
+        # Citroen
+        "雪铁龙": "c3",
+        "雪铁龙c3": "c3",
+        "c3": "c3",
+        # Dodge
+        "道奇": "charger2020",
+        "道奇警车": "charger_police",
+        "charger_police": "charger_police",
+        "道奇charger": "charger2020",
+        "charger2020": "charger2020",
+        # Ford
+        "福特": "mustang",
+        "福特野马": "mustang",
+        "野马": "mustang",
+        "mustang": "mustang",
+        "福特crown": "crown",
+        "crown": "crown",
+        # Jeep
+        "吉普": "wrangler_rubicon",
+        "吉普牧马人": "wrangler_rubicon",
+        "牧马人": "wrangler_rubicon",
+        "wrangler_rubicon": "wrangler_rubicon",
+        # Lincoln
+        "林肯": "mkz_2020",
+        "林肯mkz2017": "mkz_2017",
+        "mkz_2017": "mkz_2017",
+        "林肯mkz2020": "mkz_2020",
+        "mkz_2020": "mkz_2020",
+        # Mercedes
+        "奔驰": "benz_coupe",
+        "奔驰轿跑": "benz_coupe",
+        "benz_coupe": "benz_coupe",
+        "奔驰敞篷": "cabrio",
+        "cabrio": "cabrio",
+        "奔驰ccc": "ccc",
+        "ccc": "ccc",
+        # Mini
+        "迷你": "cooper_s",
+        "迷你cooper": "cooper_s",
+        "cooper_s": "cooper_s",
+        # Nissan
+        "日产": "patrol",
+        "日产micra": "micra",
+        "micra": "micra",
+        "日产patrol": "patrol",
+        "patrol": "patrol",
+        # Seat
+        "西雅特": "leon",
+        "西雅特leon": "leon",
+        "leon": "leon",
+        # Volkswagen
+        "大众": "t2",
+        "大众t2": "t2",
+        "t2": "t2",
+        "大众t3": "t3",
+        "t3": "t3"
+    }
+
     PEDESTRIAN_TYPES = {
         "pedestrian": "普通行人",
         "elderly": "老年人",
@@ -1128,6 +1244,28 @@ class FastMCPGitHubAssistant:
         "police": "警察",
         "business": "商务人士",
         "jogger": "慢跑者"
+    }
+
+    # 中文到英文的映射
+    PEDESTRIAN_TYPE_MAP = {
+        "普通行人": "pedestrian",
+        "行人": "pedestrian",
+        "人": "pedestrian",
+        "老年人": "elderly",
+        "老人": "elderly",
+        "儿童": "child",
+        "小孩": "child",
+        "孩子": "child",
+        "建筑工人": "construction_worker",
+        "工人": "construction_worker",
+        "警察": "police",
+        "警官": "police",
+        "商务人士": "business",
+        "商人": "business",
+        "白领": "business",
+        "慢跑者": "jogger",
+        "跑步者": "jogger",
+        "跑步的人": "jogger"
     }
 
     def _check_spawn_intent(self, message):
@@ -1146,10 +1284,12 @@ class FastMCPGitHubAssistant:
         import re
         has_count = bool(re.search(r'\d+\s*[辆个]', message))
 
-        # 检测车辆类型
-        has_vehicle_type = any(vtype in message for vtype in self.VEHICLE_TYPES.keys())
-        # 检测行人类型
-        has_pedestrian_type = any(ptype in message for ptype in self.PEDESTRIAN_TYPES.keys())
+        # 检测车辆类型（支持英文和中文）
+        has_vehicle_type = any(vtype in message for vtype in self.VEHICLE_TYPES.keys()) or \
+                           any(vname in message for vname in self.VEHICLE_TYPE_MAP.keys())
+        # 检测行人类型（支持英文和中文）- 但排除泛指的"行人"
+        specific_pedestrian_keywords = set(self.PEDESTRIAN_TYPES.keys()) | set(self.PEDESTRIAN_TYPE_MAP.keys()) - {"行人", "人"}
+        has_pedestrian_type = any(ptype in message for ptype in specific_pedestrian_keywords)
 
         # 检查是否是模糊的车辆生成请求
         is_vehicle_request = any(kw in message for kw in vehicle_keywords)
@@ -1183,14 +1323,16 @@ class FastMCPGitHubAssistant:
         prompt_parts = []
 
         if check_result['needs_vehicle_type']:
-            vehicle_list = "\n".join([f"  • {key} - {name}" for key, name in self.VEHICLE_TYPES.items()])
+            # 使用中文展示可用的车辆类型
+            vehicle_list = "\n".join([f"  • {name} ({key})" for key, name in self.VEHICLE_TYPES.items()])
             prompt_parts.append(f"🚗 **可用车辆类型：**\n{vehicle_list}")
 
         if check_result['needs_vehicle_count']:
             prompt_parts.append("🚗 **车辆数量：** 支持生成 1-100+ 辆车（取决于地图可用生成点数量）")
 
         if check_result['needs_pedestrian_type']:
-            pedestrian_list = "\n".join([f"  • {key} - {name}" for key, name in self.PEDESTRIAN_TYPES.items()])
+            # 使用中文展示可用的行人类型
+            pedestrian_list = "\n".join([f"  • {name} ({key})" for key, name in self.PEDESTRIAN_TYPES.items()])
             prompt_parts.append(f"🚶 **可用行人类型：**\n{pedestrian_list}")
 
         if check_result['needs_pedestrian_count']:
@@ -1200,11 +1342,15 @@ class FastMCPGitHubAssistant:
             prompt_parts.insert(0, "请提供以下信息以完成生成：\n")
             prompt_parts.append("\n💡 **示例指令：**")
             if check_result['needs_vehicle_type'] or check_result['needs_vehicle_count']:
-                prompt_parts.append('  • "生成5辆model3"')
-                prompt_parts.append('  • "来10辆mustang"')
+                prompt_parts.append('  • "生成5辆特斯拉"')
+                prompt_parts.append('  • "来10辆福特野马"')
+                prompt_parts.append('  • "生成3辆宝马"')
+                prompt_parts.append('  • "来5辆奔驰"')
             if check_result['needs_pedestrian_type'] or check_result['needs_pedestrian_count']:
-                prompt_parts.append('  • "生成3个police"')
-                prompt_parts.append('  • "来5个pedestrian"')
+                prompt_parts.append('  • "生成3个老年人"')
+                prompt_parts.append('  • "来5个警察"')
+                prompt_parts.append('  • "生成2个儿童"')
+                prompt_parts.append('  • "来10个普通行人"')
 
         return "\n\n".join(prompt_parts)
 
@@ -1243,8 +1389,12 @@ CARLA相关：
 - 当用户提到"连接"、"服务器"、"CARLA"等明确要求连接时，使用connect_carla
 - 当用户提到"车辆"、"生成"、"创建汽车"、"车"等，使用spawn_vehicle，count参数默认为1
 - 当用户提到"多辆车"、"生成X辆车"、"几辆车"、指定数量（如5辆、10辆），必须设置count参数为对应数字
+- 车辆类型支持中文：特斯拉(model3)、奥迪(a2/etron/tt)、宝马(grandtourer/i8/mini)、雪佛兰(impala)、雪铁龙(c3)、道奇(charger_police/charger2020)、福特(mustang/crown)、吉普(wrangler_rubicon)、林肯(mkz_2017/mkz_2020)、奔驰(benz_coupe/cabrio/ccc)、迷你(cooper_s)、日产(micra/patrol)、西雅特(leon)、大众(t2/t3)
+- 当用户使用中文车辆类型（如"生成3辆特斯拉"），你需要将中文类型转换为对应的英文类型：model3、a2、etron、tt、grandtourer、i8、mini、impala、c3、charger_police、charger2020、mustang、crown、wrangler_rubicon、mkz_2017、mkz_2020、benz_coupe、cabrio、ccc、cooper_s、micra、patrol、leon、t2、t3
 - 当用户提到"行人"、"生成行人"、"创建行人"、"人"等，直接使用spawn_pedestrian，count参数默认为1
 - 当用户提到"多个行人"、"生成X个行人"、"几个行人"、指定数量（如5个、10个），必须设置count参数为对应数字
+- 行人类型支持中文：普通行人/行人/人、老年人/老人、儿童/小孩/孩子、建筑工人/工人、警察/警官、商务人士/商人/白领、慢跑者/跑步者/跑步的人
+- 当用户使用中文行人类型（如"生成5个老年人"），你需要将中文类型转换为对应的英文类型：elderly、child、construction_worker、police、business、jogger、pedestrian
 - 当用户提到"自动驾驶"、"车辆运行"、"车自己开"等，使用setup_autopilot
 - 当用户提到"行人移动"、"行人走路"、"行人运行"等，使用setup_pedestrian_movement
 - 当用户提到"天气"、"下雨"、"晴天"、"雾天"等，使用set_weather
@@ -1272,12 +1422,20 @@ CARLA相关：
 - "生成10辆车" -> spawn_vehicle(query="model3", count=10)
 - "给我来3辆奥迪a2" -> spawn_vehicle(query="a2", count=3)
 - "创建20辆车" -> spawn_vehicle(query="model3", count=20)
+- "生成3辆特斯拉" -> spawn_vehicle(query="model3", count=3)
+- "生成5辆宝马" -> spawn_vehicle(query="grandtourer", count=5)
+- "生成2辆奔驰" -> spawn_vehicle(query="benz_coupe", count=2)
+- "生成4辆福特野马" -> spawn_vehicle(query="mustang", count=4)
 - "生成一个行人" -> spawn_pedestrian(query="pedestrian", count=1)
 - "生成5个行人" -> spawn_pedestrian(query="pedestrian", count=5)
 - "生成3个老年人" -> spawn_pedestrian(query="elderly", count=3)
 - "生成10个警察" -> spawn_pedestrian(query="police", count=10)
 - "生成一个人" -> spawn_pedestrian(query="pedestrian", count=1)
 - "生成5个人" -> spawn_pedestrian(query="pedestrian", count=5)
+- "生成3个小孩" -> spawn_pedestrian(query="child", count=3)
+- "生成5个建筑工人" -> spawn_pedestrian(query="construction_worker", count=5)
+- "生成2个商务人士" -> spawn_pedestrian(query="business", count=2)
+- "生成4个慢跑者" -> spawn_pedestrian(query="jogger", count=4)
 - "开启车辆自动驾驶" -> setup_autopilot(enable=True, radius=0.0)
 - "让车辆自己开" -> setup_autopilot(enable=True)
 - "开启行人移动" -> setup_pedestrian_movement(enable=True, radius=0.0)

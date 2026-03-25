@@ -352,17 +352,19 @@ class CarlaClient:
         lights = [light for light in self.world.get_actors() if 'traffic_light' in light.type_id]
         return lights[:5]  # 只返回前5个
 
-    async def spawn_pedestrians(self, pedestrian_type='pedestrian', count=1):
+    async def spawn_pedestrians(self, pedestrian_type='pedestrian', count=1, speed=None):
         """生成多个行人，返回生成的行人列表和最后一个行人
         
         支持的行人类型:
         - pedestrian: 普通行人
         - elderly: 老年人
         - child: 儿童
-        - construction_worker: 建筑工人
         - police: 警察
         - business: 商务人士
         - jogger: 慢跑者
+        
+        参数:
+        - speed: 行人移动速度（m/s），默认为1.4（正常步行速度），慢跑者默认为2.8
         
         数据量支持: 取决于地图大小，通常支持10-100+个行人
         """
@@ -372,6 +374,34 @@ class CarlaClient:
             return []
         
         try:
+            # 行人类型到蓝图编号的映射
+            pedestrian_blueprint_map = {
+                'police': ['0030', '0032'],
+                'child': ['0009', '0010', '0011', '0012', '0013', '0014', '0048', '0049'],
+                'elderly': ['0020', '0021', '0022', '0023', '0024', '0025'],
+                'business': ['0027', '0028', '0029'],
+                'pedestrian': ['0001', '0002', '0003', '0004', '0005', '0006', '0007', '0008', 
+                               '0015', '0016', '0017', '0018', '0019', '0026', '0031', '0033', 
+                               '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', 
+                               '0042', '0043', '0044', '0045', '0046', '0047'],
+                'jogger': ['0001', '0002', '0003', '0004', '0005', '0006', '0007', '0008', 
+                           '0015', '0016', '0017', '0018', '0019', '0026', '0031', '0033', 
+                           '0034', '0035', '0036', '0037', '0038', '0039', '0040', '0041', 
+                           '0042', '0043', '0044', '0045', '0046', '0047']
+            }
+            
+            # 根据行人类型设置默认速度
+            if speed is None:
+                if pedestrian_type == 'jogger':
+                    speed = 2.8  # 慢跑者默认速度
+                elif pedestrian_type == 'elderly':
+                    speed = 1.0  # 老年人默认速度较慢
+                else:
+                    speed = 1.4  # 正常步行速度
+            
+            # 获取当前行人类型对应的蓝图编号列表
+            blueprint_numbers = pedestrian_blueprint_map.get(pedestrian_type, pedestrian_blueprint_map['pedestrian'])
+            
             # 检查地图是否支持行人导航
             spawn_location = self.world.get_random_location_from_navigation()
             if spawn_location:
@@ -380,16 +410,6 @@ class CarlaClient:
                 app_logger.warning("⚠️ 警告: 地图可能不支持行人导航，get_random_location_from_navigation()返回None")
                 app_logger.warning("⚠️ 建议: 尝试加载Town05地图（client.load_world('Town05')）")
             
-            # 获取行人蓝图 - 参考tuto_G_pedestrian_navigation.py
-            pedestrian_blueprints = self.world.get_blueprint_library().filter('*walker.pedestrian*')
-            if not pedestrian_blueprints:
-                # 尝试其他过滤模式
-                pedestrian_blueprints = self.world.get_blueprint_library().filter('*walker*')
-            
-            if not pedestrian_blueprints:
-                app_logger.error("❌ 无法找到行人蓝图")
-                return []
-            
             # 获取控制器蓝图
             controller_bp = self.world.get_blueprint_library().find('controller.ai.walker')
             if not controller_bp:
@@ -397,13 +417,30 @@ class CarlaClient:
                 return []
             
             spawned_pedestrians = []
+            import random
             
             for i in range(count):
                 try:
-                    # 随机选择一个行人蓝图
-                    import random
-                    pedestrian_bp = random.choice(pedestrian_blueprints)
+                    # 从指定类型的蓝图编号中随机选择一个
+                    blueprint_number = random.choice(blueprint_numbers)
+                    blueprint_id = f'walker.pedestrian.{blueprint_number}'
+                    
+                    # 查找指定的行人蓝图
+                    blueprint_library = self.world.get_blueprint_library()
+                    pedestrian_bp = blueprint_library.find(blueprint_id)
+                    
+                    if not pedestrian_bp:
+                        app_logger.error(f"❌ 无法找到行人蓝图: {blueprint_id}")
+                        continue
+                    
                     app_logger.info(f"📋 尝试生成行人，蓝图: {pedestrian_bp.id}")
+                    
+                    # 如果是老年人，随机设置轮椅
+                    if pedestrian_type == 'elderly':
+                        if pedestrian_bp.has_attribute('can_use_wheelchair'):
+                            if random.random() < 0.3:  # 30%的概率使用轮椅
+                                pedestrian_bp.set_attribute('use_wheelchair', 'True')
+                                app_logger.info(f"♿ 为老年人设置轮椅")
                     
                     # 尝试多个位置生成行人
                     spawn_success = False
@@ -432,7 +469,8 @@ class CarlaClient:
                                         # 启动控制器并给它一个随机位置
                                         controller.start()
                                         controller.go_to_location(self.world.get_random_location_from_navigation())
-                                        app_logger.info(f"🎯 为行人设置随机目标位置")
+                                        controller.set_max_speed(speed)
+                                        app_logger.info(f"🎯 为行人设置随机目标位置，速度: {speed} m/s")
                                         
                                         # 存储控制器和行人的关联关系
                                         self.actors.append(pedestrian)
@@ -509,8 +547,8 @@ class CarlaClient:
                                 
                                 if walker_controller:
                                     walker_controller.go_to_location(target_location)
-                                    walker_controller.set_max_speed(1.4 + (0.5 - 1.0))  # 随机速度 0.9-1.9 m/s
-                                    app_logger.info(f"🚶 为行人 {pedestrian.id} 重新设置目标位置和速度")
+                                    walker_controller.set_max_speed(speed)
+                                    app_logger.info(f"🚶 为行人 {pedestrian.id} 重新设置目标位置，速度: {speed} m/s")
                     except Exception as e:
                         app_logger.warning(f"⚠️ 为行人设置目标时出错: {e}")
                         continue
@@ -521,9 +559,9 @@ class CarlaClient:
             app_logger.error(f"❌ 生成行人失败: {str(e)}")
             return []
 
-    async def spawn_pedestrian(self, pedestrian_type='walker'):
+    async def spawn_pedestrian(self, pedestrian_type='walker', speed=None):
         """生成单个行人（兼容旧接口）"""
-        pedestrians = await self.spawn_pedestrians(pedestrian_type, count=1)
+        pedestrians = await self.spawn_pedestrians(pedestrian_type, count=1, speed=speed)
         return pedestrians[0] if pedestrians else None
 
     def set_spectator_view(self, target_actor):
@@ -720,19 +758,20 @@ async def cleanup_scene_impl(**kwargs) -> str:
     return "✅ 已清理所有车辆和物体"
 
 
-async def spawn_pedestrian_impl(query: str, count: int = 1, **kwargs) -> str:
+async def spawn_pedestrian_impl(query: str, count: int = 1, speed: float = None, **kwargs) -> str:
     """（实际功能：生成行人）"""
     # 检查是否已连接到CARLA服务器
     if carla_client.world is None:
         return "❌ 未连接到CARLA服务器，请先使用'连接CARLA服务器'命令进行连接"
     
-    pedestrians = await carla_client.spawn_pedestrians(query, count=count)
+    pedestrians = await carla_client.spawn_pedestrians(query, count=count, speed=speed)
     if pedestrians:
+        speed_info = f"，速度: {speed} m/s" if speed is not None else ""
         if len(pedestrians) == 1:
-            return f"✅ 已生成1个{query}行人 (ID: {pedestrians[0].id})，行人已开始自动行走"
+            return f"✅ 已生成1个{query}行人 (ID: {pedestrians[0].id}){speed_info}，行人已开始自动行走"
         else:
             last_pedestrian = pedestrians[-1]
-            return f"✅ 已生成{len(pedestrians)}个{query}行人，最后一个行人ID: {last_pedestrian.id}，所有行人已开始自动行走"
+            return f"✅ 已生成{len(pedestrians)}个{query}行人，最后一个行人ID: {last_pedestrian.id}{speed_info}，所有行人已开始自动行走"
     return "❌ 行人生成失败，请确保CARLA服务器已连接且地图有可用导航点"
 
 
@@ -793,9 +832,9 @@ async def cleanup_scene(language: Optional[str] = None, period: str = "daily") -
 
 
 @mcp.tool()
-async def spawn_pedestrian(query: str, count: int = 1) -> str:
+async def spawn_pedestrian(query: str, count: int = 1, speed: float = None) -> str:
     """（实际功能：生成行人）"""
-    return await spawn_pedestrian_impl(query, count=count)
+    return await spawn_pedestrian_impl(query, count=count, speed=speed)
 
 
 @mcp.tool()
@@ -893,12 +932,13 @@ class FastMCPGitHubAssistant:
                 "type": "function",
                 "function": {
                     "name": "spawn_pedestrian",
-                    "description": "生成指定类型和数量的行人。支持类型: pedestrian(普通行人), elderly(老年人), child(儿童), construction_worker(建筑工人), police(警察), business(商务人士), jogger(慢跑者)。数据量: 取决于地图大小，通常支持10-100+个行人",
+                    "description": "生成指定类型和数量的行人。支持类型: pedestrian(普通行人), elderly(老年人), child(儿童), police(警察), business(商务人士), jogger(慢跑者)。数据量: 取决于地图大小，通常支持10-100+个行人",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "query": {"type": "string", "description": "行人类型，如pedestrian, elderly, child等", "enum": ["pedestrian", "elderly", "child", "construction_worker", "police", "business", "jogger"]},
-                            "count": {"type": "integer", "description": "生成行人数量，默认为1", "default": 1}
+                            "query": {"type": "string", "description": "行人类型，如pedestrian, elderly, child等", "enum": ["pedestrian", "elderly", "child", "police", "business", "jogger"]},
+                            "count": {"type": "integer", "description": "生成行人数量，默认为1", "default": 1},
+                            "speed": {"type": "number", "description": "行人移动速度（m/s），默认根据类型自动设置：普通行人1.4，老年人1.0，慢跑者2.8"}
                         },
                         "required": ["query"]
                     }
@@ -1045,7 +1085,8 @@ class FastMCPGitHubAssistant:
             elif function_name == "spawn_pedestrian":
                 result = await spawn_pedestrian_impl(
                     query=arguments["query"],
-                    count=arguments.get("count", 1)
+                    count=arguments.get("count", 1),
+                    speed=arguments.get("speed")
                 )
                 return {
                     "success": True,
@@ -1240,7 +1281,6 @@ class FastMCPGitHubAssistant:
         "pedestrian": "普通行人",
         "elderly": "老年人",
         "child": "儿童",
-        "construction_worker": "建筑工人",
         "police": "警察",
         "business": "商务人士",
         "jogger": "慢跑者"
@@ -1256,8 +1296,6 @@ class FastMCPGitHubAssistant:
         "儿童": "child",
         "小孩": "child",
         "孩子": "child",
-        "建筑工人": "construction_worker",
-        "工人": "construction_worker",
         "警察": "police",
         "警官": "police",
         "商务人士": "business",
@@ -1377,7 +1415,7 @@ class FastMCPGitHubAssistant:
 CARLA仿真功能：
 5. connect_carla - 连接CARLA服务器（默认localhost:2000）
 6. spawn_vehicle - 生成车辆，支持参数：query(车型), count(数量)。支持车型：model3(Tesla), a2/etron/tt(Audi), grandtourer/i8/mini(BMW), impala(Chevrolet), c3(Citroen), charger_police/charger2020(Dodge), mustang/crown(Ford), wrangler_rubicon(Jeep), mkz_2017/mkz_2020(Lincoln), benz_coupe/cabrio/ccc(Mercedes), cooper_s(Mini), micra/patrol(Nissan), leon(Seat), t2/t3(Volkswagen)
-7. spawn_pedestrian - 生成行人，支持参数：query(类型), count(数量)。支持类型：pedestrian(普通行人), elderly(老年人), child(儿童), construction_worker(建筑工人), police(警察), business(商务人士), jogger(慢跑者)
+7. spawn_pedestrian - 生成行人，支持参数：query(类型), count(数量), speed(速度)。支持类型：pedestrian(普通行人), elderly(老年人), child(儿童), police(警察), business(商务人士), jogger(慢跑者)。速度默认值：普通行人1.4m/s，老年人1.0m/s，慢跑者2.8m/s
 8. setup_autopilot - 设置车辆自动驾驶，支持参数：enable(是否启用), radius(范围半径)
 9. setup_pedestrian_movement - 设置行人自动移动，支持参数：enable(是否启用), radius(范围半径)
 10. set_weather - 设置天气（clear/rain/fog）
@@ -1393,8 +1431,8 @@ CARLA相关：
 - 当用户使用中文车辆类型（如"生成3辆特斯拉"），你需要将中文类型转换为对应的英文类型：model3、a2、etron、tt、grandtourer、i8、mini、impala、c3、charger_police、charger2020、mustang、crown、wrangler_rubicon、mkz_2017、mkz_2020、benz_coupe、cabrio、ccc、cooper_s、micra、patrol、leon、t2、t3
 - 当用户提到"行人"、"生成行人"、"创建行人"、"人"等，直接使用spawn_pedestrian，count参数默认为1
 - 当用户提到"多个行人"、"生成X个行人"、"几个行人"、指定数量（如5个、10个），必须设置count参数为对应数字
-- 行人类型支持中文：普通行人/行人/人、老年人/老人、儿童/小孩/孩子、建筑工人/工人、警察/警官、商务人士/商人/白领、慢跑者/跑步者/跑步的人
-- 当用户使用中文行人类型（如"生成5个老年人"），你需要将中文类型转换为对应的英文类型：elderly、child、construction_worker、police、business、jogger、pedestrian
+- 行人类型支持中文：普通行人/行人/人、老年人/老人、儿童/小孩/孩子、警察/警官、商务人士/商人/白领、慢跑者/跑步者/跑步的人
+- 当用户使用中文行人类型（如"生成5个老年人"），你需要将中文类型转换为对应的英文类型：elderly、child、police、business、jogger、pedestrian
 - 当用户提到"自动驾驶"、"车辆运行"、"车自己开"等，使用setup_autopilot
 - 当用户提到"行人移动"、"行人走路"、"行人运行"等，使用setup_pedestrian_movement
 - 当用户提到"天气"、"下雨"、"晴天"、"雾天"等，使用set_weather
@@ -1433,9 +1471,9 @@ CARLA相关：
 - "生成一个人" -> spawn_pedestrian(query="pedestrian", count=1)
 - "生成5个人" -> spawn_pedestrian(query="pedestrian", count=5)
 - "生成3个小孩" -> spawn_pedestrian(query="child", count=3)
-- "生成5个建筑工人" -> spawn_pedestrian(query="construction_worker", count=5)
 - "生成2个商务人士" -> spawn_pedestrian(query="business", count=2)
 - "生成4个慢跑者" -> spawn_pedestrian(query="jogger", count=4)
+- "生成3个慢跑者，速度3.0" -> spawn_pedestrian(query="jogger", count=3, speed=3.0)
 - "开启车辆自动驾驶" -> setup_autopilot(enable=True, radius=0.0)
 - "让车辆自己开" -> setup_autopilot(enable=True)
 - "开启行人移动" -> setup_pedestrian_movement(enable=True, radius=0.0)

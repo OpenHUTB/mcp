@@ -39,6 +39,20 @@ class CarlaClient:
         self.actors = []
         self.tick_task = None
         self.is_ticking = False
+        # 视频录制相关
+        self.is_recording = False
+        self.recording_task = None
+        self.recording_output_path = None
+        self.recording_fps = 30
+        self.recording_frame_count = 0
+        self.video_writer = None
+        self.camera_sensor = None
+        self.image_queue = None
+        # 视角控制相关
+        self.current_view_mode = "spectator"  # spectator, third_person, first_person, overhead, bystander
+        self.view_target = None  # 当前视角跟随的目标
+        self.view_follow_task = None  # 视角跟随任务
+        self.is_view_following = False  # 是否正在跟随视角
 
     async def connect(self, host='localhost', port=2000):
         """连接CARLA服务器"""
@@ -282,9 +296,6 @@ class CarlaClient:
                                 self.actors.append(vehicle)
                                 spawned_vehicles.append(vehicle)
                                 app_logger.info(f"🚗 生成第{i+1}辆车: {blueprint.id} (ID: {vehicle.id})")
-                                
-                                # 每生成一辆车就将镜头对准它
-                                self.set_spectator_view(vehicle)
                                 spawn_success = True
                                 break
                             else:
@@ -486,8 +497,6 @@ class CarlaClient:
                                                 app_logger.warning(f"⚠️ 推进世界时出错: {tick_error}")
                                                 continue
                                         
-                                        # 每生成一个行人就将镜头对准它
-                                        self.set_spectator_view(pedestrian)
                                         spawn_success = True
                                         break
                                     else:
@@ -689,12 +698,716 @@ class CarlaClient:
         """清理环境"""
         # 停止后台tick循环
         await self.stop_tick_loop()
-        
+
+        # 停止视角跟随
+        await self.stop_view_follow()
+
+        # 停止视频录制
+        await self.stop_recording()
+
         for actor in self.actors:
             if actor.is_alive:
                 actor.destroy()
         self.actors = []
         app_logger.info("🧹 清理所有CARLA actor")
+
+    # ============ 视角控制功能 ============
+
+    def set_third_person_view(self, target_actor, distance=5.0, height=2.0, offset_angle=0):
+        """设置第三人称视角（跟随视角）
+
+        Args:
+            target_actor: 目标actor（车辆或行人）
+            distance: 相机与目标的距离（米）
+            height: 相机高度（米）
+            offset_angle: 水平偏移角度（度）
+
+        Returns:
+            bool: 是否设置成功
+        """
+        if self.world is None:
+            app_logger.error("❌ 未连接到CARLA服务器，无法设置视角")
+            return False
+
+        try:
+            spectator = self.world.get_spectator()
+            target_transform = target_actor.get_transform()
+            target_location = target_transform.location
+
+            # 计算相机位置（在目标后方指定距离和高度）
+            import math
+            yaw_rad = math.radians(target_transform.rotation.yaw + offset_angle + 180)  # +180 表示在目标后方
+            camera_x = target_location.x + distance * math.cos(yaw_rad)
+            camera_y = target_location.y + distance * math.sin(yaw_rad)
+            camera_z = target_location.z + height
+
+            camera_location = carla.Location(x=camera_x, y=camera_y, z=camera_z)
+
+            # 计算相机朝向，指向目标
+            camera_rotation = carla.Rotation(
+                pitch=-15.0,  # 略微向下看
+                yaw=target_transform.rotation.yaw + offset_angle,
+                roll=0.0
+            )
+
+            camera_transform = carla.Transform(camera_location, camera_rotation)
+            spectator.set_transform(camera_transform)
+            app_logger.info(f"👁️  第三人称视角已设置 - 目标: {target_actor.id}, 距离: {distance}m, 高度: {height}m")
+            return True
+        except Exception as e:
+            app_logger.error(f"❌ 设置第三人称视角失败: {str(e)}")
+            return False
+
+    def set_first_person_view(self, target_actor, offset_x=0.3, offset_y=0.0, offset_z=1.2):
+        """设置第一人称视角（驾驶员/行人视角）
+
+        Args:
+            target_actor: 目标actor（车辆或行人）
+            offset_x: 前后偏移（米），默认0.3米（稍微向前）
+            offset_y: 左右偏移（米）
+            offset_z: 高度偏移（米），默认1.2米（眼睛高度）
+
+        Returns:
+            bool: 是否设置成功
+        """
+        if self.world is None:
+            app_logger.error("❌ 未连接到CARLA服务器，无法设置视角")
+            return False
+
+        try:
+            spectator = self.world.get_spectator()
+            target_transform = target_actor.get_transform()
+            target_location = target_transform.location
+
+            # 计算相机位置（在目标位置，考虑旋转）
+            import math
+            yaw_rad = math.radians(target_transform.rotation.yaw)
+            # 相机位置：在目标前方offset_x处（行人/车辆朝向的方向）
+            camera_x = target_location.x + offset_x * math.cos(yaw_rad) - offset_y * math.sin(yaw_rad)
+            camera_y = target_location.y + offset_x * math.sin(yaw_rad) + offset_y * math.cos(yaw_rad)
+            # 高度：目标位置高度 + 眼睛高度偏移
+            camera_z = target_location.z + offset_z
+
+            camera_location = carla.Location(x=camera_x, y=camera_y, z=camera_z)
+
+            # 相机朝向与目标相同
+            camera_rotation = carla.Rotation(
+                pitch=0.0,  # 平视
+                yaw=target_transform.rotation.yaw,
+                roll=0.0
+            )
+
+            camera_transform = carla.Transform(camera_location, camera_rotation)
+            spectator.set_transform(camera_transform)
+            app_logger.info(f"👁️  第一人称视角已设置 - 目标: {target_actor.id}, 高度: {camera_z:.2f}m")
+            return True
+        except Exception as e:
+            app_logger.error(f"❌ 设置第一人称视角失败: {str(e)}")
+            return False
+
+    def set_overhead_view(self, target_actor=None, height=30.0):
+        """设置俯视视角（鸟瞰视角）
+
+        Args:
+            target_actor: 目标actor，如果为None则使用地图中心
+            height: 相机高度（米）
+
+        Returns:
+            bool: 是否设置成功
+        """
+        if self.world is None:
+            app_logger.error("❌ 未连接到CARLA服务器，无法设置视角")
+            return False
+
+        try:
+            spectator = self.world.get_spectator()
+
+            if target_actor:
+                target_location = target_actor.get_transform().location
+            else:
+                # 使用地图中心或默认位置
+                target_location = carla.Location(x=0, y=0, z=0)
+
+            camera_location = carla.Location(
+                x=target_location.x,
+                y=target_location.y,
+                z=target_location.z + height
+            )
+
+            camera_rotation = carla.Rotation(
+                pitch=-90.0,  # 垂直向下看
+                yaw=0.0,
+                roll=0.0
+            )
+
+            camera_transform = carla.Transform(camera_location, camera_rotation)
+            spectator.set_transform(camera_transform)
+            app_logger.info(f"👁️  俯视视角已设置 - 高度: {height}m")
+            return True
+        except Exception as e:
+            app_logger.error(f"❌ 设置俯视视角失败: {str(e)}")
+            return False
+
+    def set_free_view(self, location=None, rotation=None):
+        """设置自由视角（观察者视角）
+
+        Args:
+            location: 相机位置，如果为None则使用默认位置
+            rotation: 相机旋转，如果为None则使用默认旋转
+
+        Returns:
+            bool: 是否设置成功
+        """
+        if self.world is None:
+            app_logger.error("❌ 未连接到CARLA服务器，无法设置视角")
+            return False
+
+        try:
+            spectator = self.world.get_spectator()
+
+            if location is None:
+                location = carla.Location(x=0, y=0, z=50)
+            if rotation is None:
+                rotation = carla.Rotation(pitch=-45, yaw=0, roll=0)
+
+            camera_transform = carla.Transform(location, rotation)
+            spectator.set_transform(camera_transform)
+            app_logger.info(f"👁️  自由视角已设置 - 位置: ({location.x}, {location.y}, {location.z})")
+            return True
+        except Exception as e:
+            app_logger.error(f"❌ 设置自由视角失败: {str(e)}")
+            return False
+
+    def rotate_view_around_target(self, target_actor, angle_degrees, distance=5.0, height=2.0):
+        """围绕目标旋转视角
+
+        Args:
+            target_actor: 目标actor
+            angle_degrees: 旋转角度（度）
+            distance: 相机与目标的距离（米）
+            height: 相机高度（米）
+
+        Returns:
+            bool: 是否设置成功
+        """
+        if self.world is None:
+            app_logger.error("❌ 未连接到CARLA服务器，无法设置视角")
+            return False
+
+        try:
+            spectator = self.world.get_spectator()
+            target_location = target_actor.get_transform().location
+
+            import math
+            angle_rad = math.radians(angle_degrees)
+            camera_x = target_location.x + distance * math.cos(angle_rad)
+            camera_y = target_location.y + distance * math.sin(angle_rad)
+            camera_z = target_location.z + height
+
+            camera_location = carla.Location(x=camera_x, y=camera_y, z=camera_z)
+
+            # 计算朝向目标的旋转
+            yaw = angle_degrees + 180  # 朝向中心
+            camera_rotation = carla.Rotation(pitch=-15, yaw=yaw, roll=0)
+
+            camera_transform = carla.Transform(camera_location, camera_rotation)
+            spectator.set_transform(camera_transform)
+            app_logger.info(f"👁️  视角已旋转到 {angle_degrees}°")
+            return True
+        except Exception as e:
+            app_logger.error(f"❌ 旋转视角失败: {str(e)}")
+            return False
+
+    async def set_bystander_view(self):
+        """设置旁观者视角（默认观察者视角，不跟随任何目标）
+
+        Returns:
+            bool: 是否设置成功
+        """
+        if self.world is None:
+            app_logger.error("❌ 未连接到CARLA服务器，无法设置视角")
+            return False
+
+        try:
+            # 停止之前的视角跟随
+            await self.stop_view_follow()
+
+            spectator = self.world.get_spectator()
+
+            # 获取地图的推荐观察者位置
+            spawn_points = self.world.get_map().get_spawn_points()
+            if spawn_points:
+                # 使用第一个生成点作为参考，在其上方设置观察者
+                ref_point = spawn_points[0].location
+                location = carla.Location(x=ref_point.x, y=ref_point.y, z=ref_point.z + 50)
+            else:
+                location = carla.Location(x=0, y=0, z=50)
+
+            rotation = carla.Rotation(pitch=-45, yaw=0, roll=0)
+            camera_transform = carla.Transform(location, rotation)
+            spectator.set_transform(camera_transform)
+
+            # 清除当前视角目标
+            self.view_target = None
+            self.current_view_mode = "bystander"
+
+            app_logger.info(f"👁️  旁观者视角已设置 - 位置: ({location.x:.1f}, {location.y:.1f}, {location.z:.1f})")
+            return True
+        except Exception as e:
+            app_logger.error(f"❌ 设置旁观者视角失败: {str(e)}")
+            return False
+
+    async def start_view_follow(self, view_mode, target_actor):
+        """启动视角跟随任务
+
+        Args:
+            view_mode: 视角模式 - third_person, first_person
+            target_actor: 要跟随的目标actor
+        """
+        import asyncio
+
+        # 停止之前的跟随
+        self.stop_view_follow()
+
+        self.is_view_following = True
+        self.view_target = target_actor
+        self.current_view_mode = view_mode
+
+        app_logger.info(f"🎯 启动视角跟随 - 模式: {view_mode}, 目标: {target_actor.id}")
+
+        while self.is_view_following and self.world:
+            try:
+                # 检查目标是否还存在
+                if not target_actor.is_alive:
+                    app_logger.warning(f"⚠️ 视角目标 {target_actor.id} 已不存在，停止跟随")
+                    break
+
+                # 根据视角模式更新视角
+                if view_mode == "third_person":
+                    self._update_third_person_view(target_actor)
+                elif view_mode == "first_person":
+                    self._update_first_person_view(target_actor)
+
+                # 每50ms更新一次（约20fps）
+                await asyncio.sleep(0.05)
+
+            except Exception as e:
+                app_logger.warning(f"⚠️ 视角跟随出错: {e}")
+                await asyncio.sleep(0.1)
+
+    async def stop_view_follow(self):
+        """停止视角跟随"""
+        if self.is_view_following:
+            self.is_view_following = False
+            app_logger.info("🛑 停止视角跟随")
+
+        # 取消之前的跟随任务
+        if self.view_follow_task and not self.view_follow_task.done():
+            try:
+                self.view_follow_task.cancel()
+                # 等待任务真正结束
+                await asyncio.sleep(0.1)
+            except Exception:
+                pass
+            self.view_follow_task = None
+
+    def _update_third_person_view(self, target_actor, distance=5.0, height=2.0):
+        """更新第三人称视角位置（用于跟随）"""
+        try:
+            spectator = self.world.get_spectator()
+            target_transform = target_actor.get_transform()
+            target_location = target_transform.location
+
+            import math
+            yaw_rad = math.radians(target_transform.rotation.yaw + 180)
+            camera_x = target_location.x + distance * math.cos(yaw_rad)
+            camera_y = target_location.y + distance * math.sin(yaw_rad)
+            camera_z = target_location.z + height
+
+            camera_location = carla.Location(x=camera_x, y=camera_y, z=camera_z)
+            camera_rotation = carla.Rotation(
+                pitch=-15.0,
+                yaw=target_transform.rotation.yaw,
+                roll=0.0
+            )
+
+            camera_transform = carla.Transform(camera_location, camera_rotation)
+            spectator.set_transform(camera_transform)
+        except Exception as e:
+            app_logger.warning(f"⚠️ 更新第三人称视角出错: {e}")
+
+    def _update_first_person_view(self, target_actor, offset_x=0.3, offset_y=0.0, offset_z=1.2):
+        """更新第一人称视角位置（用于跟随）"""
+        try:
+            spectator = self.world.get_spectator()
+            target_transform = target_actor.get_transform()
+            target_location = target_transform.location
+
+            import math
+            yaw_rad = math.radians(target_transform.rotation.yaw)
+            camera_x = target_location.x + offset_x * math.cos(yaw_rad) - offset_y * math.sin(yaw_rad)
+            camera_y = target_location.y + offset_x * math.sin(yaw_rad) + offset_y * math.cos(yaw_rad)
+            camera_z = target_location.z + offset_z
+
+            camera_location = carla.Location(x=camera_x, y=camera_y, z=camera_z)
+            camera_rotation = carla.Rotation(
+                pitch=0.0,
+                yaw=target_transform.rotation.yaw,
+                roll=0.0
+            )
+
+            camera_transform = carla.Transform(camera_location, camera_rotation)
+            spectator.set_transform(camera_transform)
+        except Exception as e:
+            app_logger.warning(f"⚠️ 更新第一人称视角出错: {e}")
+
+    def get_all_pedestrians(self):
+        """获取当前世界中所有行人列表
+
+        Returns:
+            list: 行人信息列表，每个元素包含 (id, type_id, type_name)
+        """
+        if self.world is None:
+            return []
+
+        pedestrians = []
+        try:
+            for actor in self.world.get_actors():
+                if 'walker' in actor.type_id and 'controller' not in actor.type_id:
+                    # 提取行人类型名称
+                    type_name = self._get_pedestrian_type_name(actor.type_id)
+                    pedestrians.append({
+                        'id': actor.id,
+                        'type_id': actor.type_id,
+                        'type_name': type_name
+                    })
+        except Exception as e:
+            app_logger.error(f"❌ 获取行人列表失败: {str(e)}")
+
+        return pedestrians
+
+    def _get_pedestrian_type_name(self, type_id):
+        """根据type_id获取行人类型中文名称"""
+        # 从蓝图ID中提取编号
+        import re
+        match = re.search(r'walker\.pedestrian\.(\d+)', type_id)
+        if match:
+            blueprint_number = match.group(1)
+            # 根据编号判断类型
+            if blueprint_number in ['0030', '0032']:
+                return "警察"
+            elif blueprint_number in ['0009', '0010', '0011', '0012', '0013', '0014', '0048', '0049']:
+                return "儿童"
+            elif blueprint_number in ['0020', '0021', '0022', '0023', '0024', '0025']:
+                return "老年人"
+            elif blueprint_number in ['0027', '0028', '0029']:
+                return "商务人士"
+            else:
+                return "普通行人"
+        return "未知类型"
+
+    def get_all_vehicles(self):
+        """获取当前世界中所有车辆列表
+
+        Returns:
+            list: 车辆信息列表，每个元素包含 (id, type_id, type_name)
+        """
+        if self.world is None:
+            return []
+
+        vehicles = []
+        try:
+            for actor in self.world.get_actors():
+                if 'vehicle' in actor.type_id:
+                    # 提取车辆类型名称
+                    type_name = self._get_vehicle_type_name(actor.type_id)
+                    vehicles.append({
+                        'id': actor.id,
+                        'type_id': actor.type_id,
+                        'type_name': type_name
+                    })
+        except Exception as e:
+            app_logger.error(f"❌ 获取车辆列表失败: {str(e)}")
+
+        return vehicles
+
+    def _get_vehicle_type_name(self, type_id):
+        """根据type_id获取车辆类型中文名称"""
+        # 车辆类型映射表
+        vehicle_types = {
+            'model3': '特斯拉 Model 3',
+            'a2': '奥迪 A2',
+            'etron': '奥迪 e-tron',
+            'tt': '奥迪 TT',
+            'grandtourer': '宝马 Grand Tourer',
+            'i8': '宝马 i8',
+            'mini': '宝马 Mini',
+            'impala': '雪佛兰 Impala',
+            'c3': '雪铁龙 C3',
+            'charger_police': '道奇 Charger Police',
+            'charger2020': '道奇 Charger 2020',
+            'mustang': '福特 Mustang',
+            'crown': '福特 Crown',
+            'wrangler_rubicon': '吉普 Wrangler Rubicon',
+            'mkz_2017': '林肯 MKZ 2017',
+            'mkz_2020': '林肯 MKZ 2020',
+            'benz_coupe': '奔驰 Coupe',
+            'cabrio': '奔驰 Cabrio',
+            'ccc': '奔驰 CCC',
+            'cooper_s': 'Mini Cooper S',
+            'micra': '日产 Micra',
+            'patrol': '日产 Patrol',
+            'leon': '西雅特 Leon',
+            't2': '大众 T2',
+            't3': '大众 T3',
+        }
+        # 从type_id中提取车辆型号
+        for key, name in vehicle_types.items():
+            if key in type_id.lower():
+                return name
+        return "未知车辆"
+
+    # ============ 视频录制功能 ============
+
+    async def start_recording(self, fps=30, output_path=None):
+        """开始视频录制 - 从当前窗口视角录制
+
+        Args:
+            fps: 帧率
+            output_path: 输出文件路径，如果为None则自动生成
+
+        Returns:
+            bool: 是否成功开始录制
+        """
+        import os
+        import datetime
+
+        if self.world is None:
+            app_logger.error("❌ 未连接到CARLA服务器，无法开始录制")
+            return False
+
+        if self.is_recording:
+            app_logger.warning("⚠️ 已经在录制中，请先停止当前录制")
+            return False
+
+        try:
+            # 设置输出路径
+            if output_path is None:
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                output_dir = "recordings"
+                os.makedirs(output_dir, exist_ok=True)
+                output_path = os.path.join(output_dir, f"carla_recording_{timestamp}.mp4")
+
+            self.recording_output_path = output_path
+            self.recording_fps = fps
+            self.recording_frame_count = 0
+            self.is_recording = True
+
+            # 创建相机传感器（使用spectator视角）
+            camera_bp = self.world.get_blueprint_library().find('sensor.camera.rgb')
+            camera_bp.set_attribute('image_size_x', '1920')
+            camera_bp.set_attribute('image_size_y', '1080')
+            camera_bp.set_attribute('fov', '110')
+
+            # 初始位置在spectator位置
+            spectator = self.world.get_spectator()
+            camera_transform = spectator.get_transform()
+            self.camera_sensor = self.world.spawn_actor(camera_bp, camera_transform)
+
+            # 创建图像队列
+            import queue
+            self.image_queue = queue.Queue()
+            self.camera_sensor.listen(self.image_queue.put)
+
+            # 启动录制任务
+            import asyncio
+            self.recording_task = asyncio.create_task(self._recording_loop())
+
+            app_logger.info(f"🎥 开始录制 - 输出: {output_path}, 帧率: {fps}fps, 分辨率: 1920x1080")
+            return True
+
+        except Exception as e:
+            app_logger.error(f"❌ 开始录制失败: {str(e)}")
+            return False
+
+    async def _recording_loop(self):
+        """录制循环 - 持续捕获帧并写入视频"""
+        import asyncio
+
+        frame_interval = 1.0 / self.recording_fps
+
+        while self.is_recording:
+            try:
+                # 更新相机位置到当前spectator位置
+                if self.world and self.camera_sensor:
+                    spectator = self.world.get_spectator()
+                    camera_transform = spectator.get_transform()
+                    self.camera_sensor.set_transform(camera_transform)
+
+                # 获取图像
+                if self.image_queue and not self.image_queue.empty():
+                    image = self.image_queue.get()
+                    # 转换为numpy数组
+                    import numpy as np
+                    img = np.frombuffer(image.raw_data, dtype=np.uint8)
+                    img = img.reshape((image.height, image.width, 4))  # BGRA
+                    img = img[:, :, :3]  # 转换为BGR
+                    img = img[:, :, ::-1]  # 转换为RGB
+
+                    # 写入视频文件
+                    if self.video_writer is None:
+                        import cv2
+                        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                        self.video_writer = cv2.VideoWriter(
+                            self.recording_output_path,
+                            fourcc,
+                            self.recording_fps,
+                            (image.width, image.height)
+                        )
+                        app_logger.info(f"📹 视频写入器已创建")
+
+                    self.video_writer.write(img)
+                    self.recording_frame_count += 1
+
+                await asyncio.sleep(frame_interval)
+
+            except Exception as e:
+                app_logger.warning(f"⚠️ 录制帧捕获出错: {e}")
+                await asyncio.sleep(frame_interval)
+
+    async def stop_recording(self):
+        """停止视频录制
+
+        Returns:
+            str: 操作结果信息
+        """
+        import asyncio
+
+        if not self.is_recording:
+            return "未在录制中"
+
+        try:
+            self.is_recording = False
+
+            # 等待录制任务结束
+            if self.recording_task:
+                try:
+                    await asyncio.wait_for(self.recording_task, timeout=2.0)
+                except asyncio.TimeoutError:
+                    self.recording_task.cancel()
+
+            # 释放视频写入器
+            if self.video_writer:
+                self.video_writer.release()
+                self.video_writer = None
+                app_logger.info(f"📹 视频写入器已释放")
+
+            # 停止相机监听
+            if self.camera_sensor:
+                self.camera_sensor.stop()
+
+            # 清理相机传感器
+            if self.camera_sensor:
+                if self.camera_sensor.is_alive:
+                    self.camera_sensor.destroy()
+                self.camera_sensor = None
+
+            self.image_queue = None
+
+            result = f"✅ 录制已停止，共录制 {self.recording_frame_count} 帧，已保存至: {self.recording_output_path}"
+            app_logger.info(result)
+
+            self.recording_frame_count = 0
+            return result
+
+        except Exception as e:
+            app_logger.error(f"❌ 停止录制失败: {str(e)}")
+            return f"停止录制失败: {str(e)}"
+
+    async def switch_view_mode(self, view_mode, target_actor_id=None):
+        """切换视角模式
+
+        Args:
+            view_mode: 视角模式 - third_person, first_person, overhead, free, bystander
+            target_actor_id: 目标actor ID
+
+        Returns:
+            str: 操作结果信息
+        """
+        import asyncio
+
+        if self.world is None:
+            return "❌ 未连接到CARLA服务器"
+
+        # 旁观者视角不需要目标
+        if view_mode == "bystander":
+            await self.set_bystander_view()
+            return "✅ 已切换到旁观者视角"
+
+        # 确定目标actor
+        target_actor = None
+        if target_actor_id:
+            target_actor = self.world.get_actor(target_actor_id)
+        elif self.view_target:
+            target_actor = self.view_target
+        elif self.actors:
+            for actor in reversed(self.actors):
+                if 'vehicle' in actor.type_id or 'walker' in actor.type_id:
+                    target_actor = actor
+                    break
+
+        if target_actor:
+            self.view_target = target_actor
+
+        # 设置视角
+        if view_mode == "third_person":
+            if target_actor:
+                # 先停止之前的视角跟随
+                await self.stop_view_follow()
+                # 先设置一次视角
+                self.set_third_person_view(target_actor)
+                self.current_view_mode = "third_person"
+                # 启动视角跟随任务
+                self.view_follow_task = asyncio.create_task(
+                    self.start_view_follow("third_person", target_actor)
+                )
+                result = f"✅ 已切换到第三人称视角 - 目标: {target_actor.id} (已启用跟随)"
+            else:
+                result = "❌ 第三人称视角需要指定目标"
+
+        elif view_mode == "first_person":
+            if target_actor:
+                # 先停止之前的视角跟随
+                await self.stop_view_follow()
+                # 先设置一次视角
+                self.set_first_person_view(target_actor)
+                self.current_view_mode = "first_person"
+                # 启动视角跟随任务
+                self.view_follow_task = asyncio.create_task(
+                    self.start_view_follow("first_person", target_actor)
+                )
+                result = f"✅ 已切换到第一人称视角 - 目标: {target_actor.id} (已启用跟随)"
+            else:
+                result = "❌ 第一人称视角需要指定目标"
+
+        elif view_mode == "overhead":
+            # 停止之前的跟随
+            await self.stop_view_follow()
+            self.set_overhead_view(target_actor)
+            self.current_view_mode = "overhead"
+            result = "✅ 已切换到俯视视角"
+
+        elif view_mode == "free":
+            # 停止之前的跟随
+            await self.stop_view_follow()
+            self.set_free_view()
+            self.current_view_mode = "free"
+            result = "✅ 已切换到自由视角"
+
+        else:
+            result = f"❌ 未知的视角模式: {view_mode}"
+
+        return result
 
 
 # 全局客户端实例
@@ -792,11 +1505,43 @@ async def setup_pedestrian_movement_impl(enable: bool = True, radius: float = 0.
     # 检查是否已连接到CARLA服务器
     if carla_client.world is None:
         return "❌ 未连接到CARLA服务器，请先使用'连接CARLA服务器'命令进行连接"
-    
+
     success = await carla_client.setup_pedestrian_movement(enable, radius)
     if success:
         return f"✅ 行人自动移动已{'启用' if enable else '禁用'}"
     return "❌ 设置行人移动失败"
+
+
+# ============ 视角控制和视频录制实现函数 ============
+
+async def switch_view_impl(view_mode: str, target_actor_id: int = None, **kwargs) -> str:
+    """（实际功能：切换视角模式）"""
+    if carla_client.world is None:
+        return "❌ 未连接到CARLA服务器，请先使用'连接CARLA服务器'命令进行连接"
+
+    result = await carla_client.switch_view_mode(view_mode, target_actor_id)
+    return result
+
+
+async def start_recording_impl(fps: int = 30, **kwargs) -> str:
+    """（实际功能：开始视频录制）"""
+    if carla_client.world is None:
+        return "❌ 未连接到CARLA服务器，请先使用'连接CARLA服务器'命令进行连接"
+
+    success = await carla_client.start_recording(fps=fps)
+
+    if success:
+        return f"🎥 开始录制 - 帧率: {fps}fps。录制过程中可以自由切换视角。"
+    return "❌ 开始录制失败"
+
+
+async def stop_recording_impl(**kwargs) -> str:
+    """（实际功能：停止视频录制）"""
+    if carla_client.world is None:
+        return "❌ 未连接到CARLA服务器"
+
+    result = await carla_client.stop_recording()
+    return result
 
 
 # ============ FastMCP 工具装饰器版本 ============
@@ -847,6 +1592,24 @@ async def setup_autopilot(enable: bool = True, radius: float = 0.0) -> str:
 async def setup_pedestrian_movement(enable: bool = True, radius: float = 0.0) -> str:
     """（实际功能：设置行人自动移动）"""
     return await setup_pedestrian_movement_impl(enable, radius=radius)
+
+
+@mcp.tool()
+async def switch_view(view_mode: str = "third_person", target_actor_id: int = None) -> str:
+    """（实际功能：切换视角）"""
+    return await switch_view_impl(view_mode, target_actor_id)
+
+
+@mcp.tool()
+async def start_recording(fps: int = 30) -> str:
+    """（实际功能：开始录制视频）"""
+    return await start_recording_impl(fps)
+
+
+@mcp.tool()
+async def stop_recording() -> str:
+    """（实际功能：停止录制视频）"""
+    return await stop_recording_impl()
 
 
 
@@ -971,6 +1734,46 @@ class FastMCPGitHubAssistant:
                             "radius": {"type": "number", "description": "移动范围半径（米），0表示全图，默认为0", "default": 0.0}
                         },
                         "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "switch_view",
+                    "description": "切换视角模式。支持 third_person(第三人称跟随视角), first_person(第一人称视角), overhead(俯视/鸟瞰视角), free(自由/观察者视角)。切换视角时会自动将观察相机移动到对应位置",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "view_mode": {"type": "string", "description": "视角模式", "enum": ["third_person", "first_person", "overhead", "free"], "default": "third_person"},
+                            "target_actor_id": {"type": "integer", "description": "目标actor ID，如果不指定则自动选择最新生成的车辆或行人", "default": None}
+                        },
+                        "required": ["view_mode"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "start_recording",
+                    "description": "开始录制视频。录制的是当前窗口视角的内容，录制过程中可以自由切换视角",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "fps": {"type": "integer", "description": "帧率，默认30", "default": 30}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "stop_recording",
+                    "description": "停止视频录制并保存视频文件。视频将保存到recordings目录下",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {}
                     }
                 }
             },
@@ -1106,6 +1909,29 @@ class FastMCPGitHubAssistant:
                     enable=arguments.get("enable", True),
                     radius=arguments.get("radius", 50.0)
                 )
+                return {
+                    "success": True,
+                    "data": result
+                }
+            elif function_name == "switch_view":
+                result = await switch_view_impl(
+                    view_mode=arguments.get("view_mode", "third_person"),
+                    target_actor_id=arguments.get("target_actor_id")
+                )
+                return {
+                    "success": True,
+                    "data": result
+                }
+            elif function_name == "start_recording":
+                result = await start_recording_impl(
+                    fps=arguments.get("fps", 30)
+                )
+                return {
+                    "success": True,
+                    "data": result
+                }
+            elif function_name == "stop_recording":
+                result = await stop_recording_impl()
                 return {
                     "success": True,
                     "data": result
@@ -1313,10 +2139,23 @@ class FastMCPGitHubAssistant:
         """
         message = message.lower()
 
+        # 首先排除视角控制相关的指令（这些不是生成请求）
+        view_keywords = ['视角', '切换', '人称', '俯视', '鸟瞰', '自由视角', '录制', '录像', '视频']
+        if any(kw in message for kw in view_keywords):
+            return {
+                'needs_vehicle_type': False,
+                'needs_vehicle_count': False,
+                'needs_pedestrian_type': False,
+                'needs_pedestrian_count': False,
+                'is_ambiguous': False
+            }
+
         # 车辆相关关键词
         vehicle_keywords = ['车', '车辆', '汽车', '生成车', '创建车', '来车', '加车', '添加车辆']
-        # 行人相关关键词
-        pedestrian_keywords = ['行人', '人', '生成行人', '创建行人', '来人', '加人', '添加行人', '路人']
+        # 行人相关关键词（更精确，避免误判）
+        pedestrian_keywords = ['行人', '生成行人', '创建行人', '添加行人', '路人']
+        # 单独的"人"字需要结合生成类动词才认为是生成行人
+        person_spawn_verbs = ['生成', '创建', '来', '加', '添加', '放', 'spawn']
 
         # 数量相关模式
         import re
@@ -1331,8 +2170,15 @@ class FastMCPGitHubAssistant:
 
         # 检查是否是模糊的车辆生成请求
         is_vehicle_request = any(kw in message for kw in vehicle_keywords)
+
         # 检查是否是模糊的行人生成请求
         is_pedestrian_request = any(kw in message for kw in pedestrian_keywords)
+        # 单独的"人"需要配合生成动词才算
+        if not is_pedestrian_request and '人' in message:
+            has_spawn_verb = any(verb in message for verb in person_spawn_verbs)
+            # 排除"人称"（第一人称、第三人称等）
+            if has_spawn_verb and '人称' not in message:
+                is_pedestrian_request = True
 
         result = {
             'needs_vehicle_type': False,
@@ -1392,6 +2238,118 @@ class FastMCPGitHubAssistant:
 
         return "\n\n".join(prompt_parts)
 
+    def _check_view_switch_intent(self, message):
+        """检测用户是否有切换视角的意图，如果有多个行人/车辆则询问选择
+
+        Returns:
+            dict: 包含是否需要询问、视角模式、可用目标列表等信息
+        """
+        import re
+        message = message.lower()
+
+        # 视角相关关键词
+        view_keywords = ['视角', '人称', '俯视', '鸟瞰', '自由视角', '旁观者']
+        has_view_intent = any(kw in message for kw in view_keywords)
+
+        if not has_view_intent:
+            return {'needs_target_selection': False}
+
+        # 检测是否指定了特定的视角模式
+        view_mode = None
+        if '第一人称' in message or 'first_person' in message:
+            view_mode = 'first_person'
+        elif '第三人称' in message or 'third_person' in message:
+            view_mode = 'third_person'
+        elif '俯视' in message or '鸟瞰' in message or 'overhead' in message:
+            view_mode = 'overhead'
+        elif '自由' in message or 'free' in message:
+            view_mode = 'free'
+        elif '旁观者' in message or 'bystander' in message:
+            view_mode = 'bystander'
+        else:
+            # 默认第三人称
+            view_mode = 'third_person'
+
+        # 旁观者视角不需要选择目标
+        if view_mode == 'bystander':
+            return {'needs_target_selection': False, 'view_mode': 'bystander'}
+
+        # 尝试从消息中提取ID（支持 "ID26", "ID 26", "id26", "id 26" 等格式）
+        target_id = None
+        id_patterns = [
+            r'id\s*(\d+)',  # ID 26, id26, ID26
+            r'[^\d](\d+)$',  # 以数字结尾
+            r'\s(\d+)\s',  # 中间有数字
+        ]
+        for pattern in id_patterns:
+            match = re.search(pattern, message, re.IGNORECASE)
+            if match:
+                target_id = int(match.group(1))
+                break
+
+        # 获取当前所有行人和车辆
+        pedestrians = carla_client.get_all_pedestrians()
+        vehicles = carla_client.get_all_vehicles()
+
+        all_targets = []
+        for p in pedestrians:
+            all_targets.append({'id': p['id'], 'type': p['type_name'], 'category': '行人'})
+        for v in vehicles:
+            all_targets.append({'id': v['id'], 'type': v['type_name'], 'category': '车辆'})
+
+        # 如果提取到了ID，验证该ID是否存在
+        if target_id is not None:
+            target_exists = any(t['id'] == target_id for t in all_targets)
+            if target_exists:
+                return {
+                    'needs_target_selection': False,
+                    'view_mode': view_mode,
+                    'target_id': target_id
+                }
+
+        # 如果只有一个目标，直接使用
+        if len(all_targets) == 1:
+            return {
+                'needs_target_selection': False,
+                'view_mode': view_mode,
+                'target_id': all_targets[0]['id']
+            }
+
+        # 如果有多个目标，需要询问
+        if len(all_targets) > 1:
+            return {
+                'needs_target_selection': True,
+                'view_mode': view_mode,
+                'targets': all_targets
+            }
+
+        # 没有可用的目标
+        return {
+            'needs_target_selection': False,
+            'view_mode': view_mode,
+            'no_targets': True
+        }
+
+    def _generate_view_selection_prompt(self, view_mode, targets):
+        """生成视角目标选择提示"""
+        view_mode_names = {
+            'first_person': '第一人称视角',
+            'third_person': '第三人称视角',
+            'overhead': '俯视视角',
+            'free': '自由视角'
+        }
+
+        prompt_parts = [f"👁️ 请选择要切换到{view_mode_names.get(view_mode, view_mode)}的目标：\n"]
+
+        for i, target in enumerate(targets, 1):
+            prompt_parts.append(f"  {i}. ID: {target['id']} - {target['type']} ({target['category']})")
+
+        prompt_parts.append(f"\n💡 **示例指令：**")
+        prompt_parts.append(f'  • "切换到{view_mode_names.get(view_mode, view_mode)} ID {targets[0]["id"]}"')
+        prompt_parts.append(f'  • "用ID {targets[0]["id"]} 切换{view_mode_names.get(view_mode, view_mode)}"')
+
+        return "\n".join(prompt_parts)
+
     async def chat(self, user_message):
         """处理聊天请求 - 使用FastMCP工具的AI对话"""
 
@@ -1401,6 +2359,28 @@ class FastMCPGitHubAssistant:
             prompt = self._generate_spawn_prompt(spawn_check)
             return {
                 "message": self.process_markdown(prompt),
+                "tool_calls": None,
+                "conversation": [{"role": "user", "content": user_message}]
+            }
+
+        # 检查是否有视角切换意图
+        view_check = self._check_view_switch_intent(user_message)
+        if view_check.get('needs_target_selection'):
+            # 有多个目标且用户没有指定ID，显示选择列表
+            prompt = self._generate_view_selection_prompt(view_check['view_mode'], view_check['targets'])
+            return {
+                "message": self.process_markdown(prompt),
+                "tool_calls": None,
+                "conversation": [{"role": "user", "content": user_message}]
+            }
+        elif view_check.get('target_id'):
+            # 用户指定了ID或只有一个目标，直接执行视角切换
+            result = await switch_view_impl(
+                view_mode=view_check['view_mode'],
+                target_actor_id=view_check['target_id']
+            )
+            return {
+                "message": self.process_markdown(result),
                 "tool_calls": None,
                 "conversation": [{"role": "user", "content": user_message}]
             }
@@ -1421,6 +2401,9 @@ CARLA仿真功能：
 10. set_weather - 设置天气（clear/rain/fog）
 11. get_traffic_lights - 查看交通灯状态
 12. cleanup_scene - 清理仿真场景
+13. switch_view - 切换视角模式，支持 third_person(第三人称跟随), first_person(第一人称), overhead(俯视/鸟瞰), free(自由视角), bystander(旁观者视角)
+14. start_recording - 开始视频录制，录制当前窗口视角的内容
+15. stop_recording - 停止视频录制
 
 
 CARLA相关：
@@ -1438,6 +2421,21 @@ CARLA相关：
 - 当用户提到"天气"、"下雨"、"晴天"、"雾天"等，使用set_weather
 - 当用户提到"交通灯"、"信号灯"、"红绿灯"等，使用get_traffic_lights
 - 当用户提到"清理"、"重置"、"清除场景"等，使用cleanup_scene
+- 当用户提到"视角"、"切换视角"、"第三人称"、"第一人称"、"俯视"、"鸟瞰"、"自由视角"、"旁观者"等，使用switch_view
+  * third_person: 第三人称跟随视角，相机在目标后方跟随
+  * first_person: 第一人称视角，模拟驾驶员或行人视角
+  * overhead: 俯视/鸟瞰视角，从上方俯瞰场景
+  * free: 自由视角/观察者视角，可以自由观察
+  * bystander: 旁观者视角，回到默认观察者位置，不跟随任何目标
+- 当用户提到"录制"、"录像"、"视频"、"开始录制"、"录屏"等，使用start_recording
+  * 录制的是当前窗口视角的内容，与当前看到的画面一致
+  * 录制过程中可以自由切换视角，录制不会中断
+  * 可以指定帧率，默认30fps
+- 当用户提到"停止录制"、"结束录像"、"保存视频"等，使用stop_recording
+- 当用户提到"切换到第三人称视角"、"切换到第一人称"等，但没有指定目标ID时：
+  * 如果只有一个行人/车辆，系统会自动选择它
+  * 如果有多个行人/车辆，系统会询问用户选择哪个目标
+  * 用户可以回复"切换到第三人称视角 ID xxx"来指定目标
 
 重要规则：
 - 如果用户已经连接过CARLA服务器，不要再重复调用connect_carla
@@ -1481,6 +2479,18 @@ CARLA相关：
 - "设置雨天" -> set_weather(weather_type="rain")
 - "查看交通灯" -> get_traffic_lights()
 - "清理场景" -> cleanup_scene()
+- "切换到第三人称视角" -> switch_view(view_mode="third_person")
+- "切换到第三人称视角 ID 123" -> switch_view(view_mode="third_person", target_actor_id=123)
+- "切换到第一人称" -> switch_view(view_mode="first_person")
+- "切换到第一人称 ID 456" -> switch_view(view_mode="first_person", target_actor_id=456)
+- "切换到俯视视角" -> switch_view(view_mode="overhead")
+- "切换到自由视角" -> switch_view(view_mode="free")
+- "切换到旁观者视角" -> switch_view(view_mode="bystander")
+- "回到默认视角" -> switch_view(view_mode="bystander")
+- "开始录制视频" -> start_recording()
+- "开始录制60fps视频" -> start_recording(fps=60)
+- "停止录制" -> stop_recording()
+- "结束录像" -> stop_recording()
 
 重要提示：
 - 当用户明确要求生成多辆车时（如"生成5辆车"、"来10辆车"），必须在spawn_vehicle的arguments中包含count参数

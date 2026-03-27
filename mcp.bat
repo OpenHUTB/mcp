@@ -121,6 +121,14 @@ REM Set environment variables
 set "PATH=%VENV_PATH%\Scripts;%VENV_PATH%;%PATH%"
 set "VIRTUAL_ENV=%VENV_PATH%"
 
+REM Check if OpenCV (cv2) is installed
+echo Checking OpenCV (cv2)...
+"%PYTHON_EXE%" "%PROJECT_ROOT%\llm\check_opencv.py"
+if errorlevel 1 (
+    pause
+    exit /b 1
+)
+
 REM 1. First, run main_ai.py
 echo Running main_ai.py...
 start "main_ai" "%PYTHON_EXE%" "%MAIN_AI_PY%"

@@ -1249,14 +1249,15 @@ class CarlaClient:
                     image = self.image_queue.get()
                     # 转换为numpy数组
                     import numpy as np
-                    img = np.frombuffer(image.raw_data, dtype=np.uint8)
-                    img = img.reshape((image.height, image.width, 4))  # BGRA
-                    img = img[:, :, :3]  # 转换为BGR
-                    img = img[:, :, ::-1]  # 转换为RGB
+                    import cv2
+                    array = np.frombuffer(image.raw_data, dtype=np.uint8)
+                    array = array.reshape((image.height, image.width, 4))
+                    array = array[:, :, :3]
+                    img_rgb = array[:, :, ::-1]
+                    img_bgr = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2BGR)
 
                     # 写入视频文件
                     if self.video_writer is None:
-                        import cv2
                         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
                         self.video_writer = cv2.VideoWriter(
                             self.recording_output_path,
@@ -1266,7 +1267,7 @@ class CarlaClient:
                         )
                         app_logger.info(f"📹 视频写入器已创建")
 
-                    self.video_writer.write(img)
+                    self.video_writer.write(img_bgr)
                     self.recording_frame_count += 1
 
                 await asyncio.sleep(frame_interval)

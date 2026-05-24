@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "hutb-mcp": {
+      "command": "python",
+      "args": ["-m", "hutb_mcp"],
+      "cwd": "D:/兼职/21/mcp-main/sim",
+      "env": {
+        "HUTB_HOST": "localhost",
+        "HUTB_PORT": "2000",
+        "LOG_LEVEL": "INFO"
+      },
+      "disabled": false,
+      "autoApprove": []
+    }
+  }
+}

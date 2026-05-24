@@ -1,2 +1,0 @@
-[console_scripts]
-hutb-mcp = hutb_mcp:main

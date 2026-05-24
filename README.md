@@ -1,77 +1,318 @@
-# HUTB 模拟器的 MCP 实现
+# 基于 FastMCP 的人车仿真器交互控制系统
 
-基于 MCP 实现和具身人、无人车、无人机的大模型交互。
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue)](https://python.org)
+[![FastMCP](https://img.shields.io/badge/FastMCP-Latest-brightgreen)](https://github.com/jlowin/fastmcp)
+[![Unreal Engine](https://img.shields.io/badge/Unreal%20Engine-4.x%2F5.x-orange)](https://www.unrealengine.com)
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
+基于 MCP (Model Context Protocol) 实现与 HUTB 人车仿真器的大模型交互控制系统，支持通过自然语言控制车辆、无人机、场景编辑和天气等功能。
 
-## 🏗️ 项目架构
+**作者**: 徐杨杨 | **学校**: 湖南工商大学
 
-```mermaid
-graph LR
-    A[用户] --> B[人机界面：语音对话/键盘交互]
-    B --> C[FastMCP 工具层]
-    C --> D[HUTB 模拟器 API 客户端]
-    C --> E[Deepseek AI]
-    
-    style B fill:#e1f5fe
-    style C fill:#ccffcc
-    style D fill:#fff3e0
-    style E fill:#f3e5f5
+---
+
+## 🎯 项目目标
+
+1. **实现 car、air、editor 的常用 API 控制** - 车辆、无人机、场景编辑器的完整控制接口
+2. **集成其他模块功能** - 天气控制、传感器管理、极端天气生成、Blueprint 编辑等
+3. **打包成可直接部署的服务** - 一键启动，支持 MCP 协议与 AI 助手交互
+
+---
+
+## 🏗️ 系统架构
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         用户交互层                                    │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                  │
+│  │  语音输入    │  │  Web界面    │  │  AI助手     │                  │
+│  │  (麦克风)    │  │  (浏览器)   │  │ (Claude等)  │                  │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘                  │
+└─────────┼────────────────┼────────────────┼─────────────────────────┘
+          │                │                │
+          ▼                ▼                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      MCP 服务层 (FastMCP)                            │
+│  ┌────────────────────────────┐  ┌────────────────────────────┐     │
+│  │     HUTB MCP Server        │  │    Unreal MCP Server       │     │
+│  │  (sim/hutb_mcp/)           │  │    (unreal/)               │     │
+│  │  ├─ Vehicle Tools          │  │  ├─ Editor Tools           │     │
+│  │  ├─ Air Tools              │  │  ├─ Blueprint Tools        │     │
+│  │  ├─ Editor Tools           │  │  ├─ Node Tools             │     │
+│  │  ├─ Weather Tools          │  │  ├─ Project Tools          │     │
+│  │  └─ Sensor Tools           │  │  └─ UMG Tools              │     │
+│  └────────────────────────────┘  └────────────────────────────┘     │
+└─────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      仿真器层                                        │
+│  ┌────────────────────────────┐  ┌────────────────────────────┐     │
+│  │   HUTB/CARLA 仿真器         │  │   Unreal Engine 编辑器      │     │
+│  │   (CarlaUE4.exe)           │  │   (UnrealMCP Plugin)       │     │
+│  │   Port: 2000               │  │   Port: 55557              │     │
+│  └────────────────────────────┘  └────────────────────────────┘     │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
+---
 
-## 1. 部署运行
+## ✨ 功能模块
 
-**运行推荐的软硬件**
+### HUTB MCP Server (仿真器控制)
 
-* Intel i7 gen 9th - 11th+ / AMD ryzen 9+
-* +16 GB 内存
-* NVIDIA RTX 3070+
-* Windows 10/11
+| 模块 | 功能 | 状态 |
+|------|------|------|
+| **车辆控制** | 生成、销毁、自动驾驶、手动控制、状态获取 | ✅ |
+| **无人机控制** | 生成、飞行控制、悬停、降落 | ✅ |
+| **编辑器控制** | Actor 管理、场景编辑、地图加载 | ✅ |
+| **天气控制** | 天气参数、预设天气、极端天气 | ✅ |
+| **传感器管理** | 相机、激光雷达、雷达 | ✅ |
 
-双击 [mcp.bat](./mcp.bat) 启动模拟器（第一次启动会下载相关依赖，需要等待一段时间）。
+### Unreal MCP Server (引擎编辑)
 
-### 1.1 常用对话
+| 模块 | 功能 | 状态 |
+|------|------|------|
+| **Editor Tools** | Actor 创建/删除/变换、视口控制 | ✅ |
+| **Blueprint Tools** | Blueprint 创建、组件添加、属性设置 | ✅ |
+| **Node Tools** | 蓝图节点图编辑、事件/函数节点 | ✅ |
+| **Project Tools** | 输入映射配置 | ✅ |
+| **UMG Tools** | UI Widget 创建和编辑 | ✅ |
+
+---
+
+## 📁 项目结构
+
 ```
-连接服务器
-设置雨天天气条件
-生成车辆
-开启自动驾驶
-生成行人（默认开启自由移动）
-切换视角
-切换第三人称视角ID
-切换第一人称视角ID
-切换旁观者视角
-开启录制
-结束录制
+mcp-main/
+├── sim/                        # HUTB MCP 服务器 (仿真器控制)
+│   ├── hutb_mcp/              # 核心包
+│   │   ├── server.py          # FastMCP 服务器
+│   │   ├── connection.py      # CARLA 连接管理
+│   │   └── tools/             # 工具模块
+│   │       ├── vehicle_tools.py   # 车辆控制
+│   │       ├── air_tools.py       # 无人机控制
+│   │       ├── editor_tools.py    # 编辑器控制
+│   │       ├── weather_tools.py   # 天气控制
+│   │       └── sensor_tools.py    # 传感器管理
+│   └── pyproject.toml         # 项目配置
+│
+├── unreal/                     # Unreal MCP 服务器 (引擎编辑)
+│   ├── unreal_mcp_server.py   # FastMCP 服务器
+│   ├── tools/                 # 工具模块
+│   │   ├── editor_tools.py    # 编辑器工具
+│   │   ├── blueprint_tools.py # Blueprint 工具
+│   │   ├── node_tools.py      # 节点图工具
+│   │   ├── project_tools.py   # 项目工具
+│   │   └── umg_tools.py       # UI 工具
+│   └── scripts/               # 测试脚本
+│
+├── MCPGameProject/             # Unreal Engine 插件
+│   └── Plugins/UnrealMCP/     # C++ 插件源码
+│
+├── llm/                        # AI 助手 Web 界面
+│   ├── main_ai.py             # Web 服务入口
+│   └── src/                   # 前端源码
+│
+├── Docs/                       # 文档
+│   └── Tools/                 # API 文档
+│
+├── model/                      # 人形机器人模型
+└── hutb.bat                   # 一键启动脚本
 ```
 
+---
 
-## 2. 实现
+## 🚀 快速开始
 
-### 2.1 大模型
+> **🎉 项目已升级为虚拟环境 (venv) 管理！** 无需 Conda，更轻量、更简单！
 
-[基于FastMCP框架的 HUTB 智能助手](llm/README.md) 。
+### 方式一：一键启动（推荐）⭐
 
-![](./llm/screenshots/hutb_control.png)
+#### 步骤 1: 创建虚拟环境
 
+```cmd
+setup_venv.bat
+```
 
-### 2.2 交互增强
-（待实现）加上语音识别和合成的整个工作流依次包括：[麦克风](https://item.m.jd.com/product/100025694525.html) /Web浏览器、 [语音](https://mp.weixin.qq.com/s?src=11&timestamp=1754125763&ver=6150&signature=6MJAq932niAOOc0qQSU0kuIulTwbkRstev6RvAM0Q*v*bGEZEINUcdtIN4zu23ZW71o0-GD1OB7DU7YjJcCqaWt6Iv63U4SKUIy1z1cK3khakAGz-BcQuDzPMdsJEK9P&new=1) 识别（方言、老人言： PaddleSpeech ）、QWen/DeepSeek 大模型、流式语音合成 PP-TTS （语音播报/控制模拟器的模型或实体机器人）。
+首次运行会自动:
+- 创建 Python 虚拟环境 `env.UE4-hutb`
+- 安装所有依赖包
+- 配置 CARLA Python API (如果存在)
 
-### 2.3 其他：[人形机器人模拟环境搭建](./model/humanoid.md)
+#### 步骤 2: 启动项目
 
+```cmd
+hutb.bat
+```
 
-## 3. 参考
+自动完成:
+- 激活虚拟环境
+- 检查依赖
+- 启动 CARLA 仿真器 (如果存在)
+- 启动 AI Web 界面 (http://localhost:3000)
 
-* [基于FastMCP框架的 Github 助手](https://github.com/wink-wink-wink555/ai-github-assistant)
+### 方式二：手动安装
 
-* [carla-mcp](https://github.com/shikharvashistha/carla-mcp)
+#### 1. HUTB MCP Server (仿真器控制)
 
-* [网易云音乐 MCP 控制器](https://modelscope.cn/mcp/servers/lixiande/CloudMusic_Auto_Player)
+```cmd
+# 创建并激活虚拟环境
+python -m venv env.UE4-hutb
+env.UE4-hutb\Scripts\activate.bat
 
+# 安装 HUTB Python API
+pip install D:\hutb\PythonAPI\carla\dist\hutb-2.9.16-cp310-cp310-win_amd64.whl
 
-* [机器人本体的仿真环境使用教程](https://kuavo.lejurobot.com/manual/basic_usage/kuavo-ros-control/docs/4%E5%BC%80%E5%8F%91%E6%8E%A5%E5%8F%A3/%E4%BB%BF%E7%9C%9F%E7%8E%AF%E5%A2%83%E4%BD%BF%E7%94%A8/) 
-* [机器人本体三维模型](https://gitee.com/OpenHUTB/kuavo-ros-opensource/tree/master/src/kuavo_assets/models)
-* [基于虚幻引擎的PR2机器人集成和调试](sim/README.md)（根据 [OpenSim](https://github.com/OpenHUTB/move) 建模）
+# 安装项目依赖
+cd sim
+pip install -e .
 
-* [训练MuJoCo和真实人形机器人行走](https://github.com/rohanpsingh/LearningHumanoidWalking) 
+# 配置环境变量
+copy .env.example .env
+
+# 启动服务（先启动 CarlaUE4.exe）
+python -m hutb_mcp
+```
+
+#### 2. AI Web 界面
+
+```cmd
+# 激活虚拟环境
+env.UE4-hutb\Scripts\activate.bat
+
+# 安装依赖
+cd llm
+pip install -r requirements.txt
+
+# 配置 API 密钥
+copy .env.example .env
+# 编辑 .env 文件，填入 DEEPSEEK_API_KEY
+
+# 启动 Web 界面
+python main_ai.py
+```
+
+#### 3. Unreal MCP Server (引擎编辑)
+
+```cmd
+# 激活虚拟环境
+env.UE4-hutb\Scripts\activate.bat
+
+# 进入目录
+cd unreal
+
+# 安装依赖
+pip install -e .
+
+# 启动服务（先启动 Unreal Editor 并加载 UnrealMCP 插件）
+python unreal_mcp_server.py
+```
+
+### 📖 详细文档
+
+- [🚀 快速启动指南](QUICKSTART.md) - 最简单的入门方式
+- [⚙️ 虚拟环境设置](VENV_SETUP.md) - 详细的环境配置说明
+
+---
+
+## 🔧 MCP 客户端配置
+
+### HUTB MCP (仿真器控制)
+
+```json
+{
+  "mcpServers": {
+    "hutb-mcp": {
+      "command": "python",
+      "args": ["-m", "hutb_mcp"],
+      "cwd": "D:/path/to/mcp-main/sim",
+      "env": {
+        "HUTB_HOST": "localhost",
+        "HUTB_PORT": "2000"
+      }
+    }
+  }
+}
+```
+
+### Unreal MCP (引擎编辑)
+
+```json
+{
+  "mcpServers": {
+    "unreal-mcp": {
+      "command": "python",
+      "args": ["unreal_mcp_server.py"],
+      "cwd": "D:/path/to/mcp-main/unreal"
+    }
+  }
+}
+```
+
+---
+
+## 📖 API 文档
+
+### 车辆控制 (HUTB MCP)
+
+```python
+get_vehicle_blueprints()                    # 获取可用车辆蓝图
+spawn_vehicle(blueprint_id, location, rotation)  # 生成车辆
+destroy_vehicle(vehicle_id)                 # 销毁车辆
+set_vehicle_autopilot(vehicle_id, enabled)  # 设置自动驾驶
+apply_vehicle_control(vehicle_id, throttle, steer, brake)  # 手动控制
+get_vehicle_state(vehicle_id)               # 获取车辆状态
+```
+
+### 天气控制 (HUTB MCP)
+
+```python
+get_weather()                               # 获取当前天气
+set_weather_preset(preset)                  # 设置预设天气 (clear/cloudy/rainy/foggy/stormy)
+set_extreme_weather(weather_type)           # 设置极端天气 (heavy_rain/dense_fog/blizzard/sandstorm)
+set_time_of_day(hour, minute)               # 设置时间
+```
+
+### 无人机控制 (HUTB MCP)
+
+```python
+spawn_drone(location, rotation)             # 生成无人机
+get_drone_state(drone_id)                   # 获取状态
+set_drone_destination(drone_id, destination)  # 设置目标
+drone_hover(drone_id)                       # 悬停
+drone_land(drone_id)                        # 降落
+```
+
+### 编辑器控制 (Unreal MCP)
+
+```python
+get_actors_in_level()                       # 获取场景 Actor
+spawn_actor(name, type, location, rotation) # 生成 Actor
+delete_actor(name)                          # 删除 Actor
+set_actor_transform(name, location, rotation, scale)  # 设置变换
+create_blueprint(name, parent_class)        # 创建 Blueprint
+compile_blueprint(blueprint_name)           # 编译 Blueprint
+```
+
+---
+
+## 🧪 测试场景
+
+- **Town10** (优先) - 主要测试场景
+- **Town01** - 备选测试场景
+
+---
+
+## 📚 参考资料
+
+- [FastMCP 框架](https://github.com/jlowin/fastmcp)
+- [CARLA Python API](https://carla.readthedocs.io/en/latest/python_api/)
+- [HUTB 文档](https://openhutb.github.io/doc/python_api/)
+- [Unreal MCP](https://github.com/chongdashu/unreal-mcp)
+
+---
+
+## 📄 许可证
+
+MIT License

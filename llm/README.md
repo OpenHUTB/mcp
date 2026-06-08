@@ -246,7 +246,6 @@ async def get_trending_repositories(language: Optional[str] = None,
 
 ## 📚 详细文档
 
-- 📖 **[FastMCP设置指南](FASTMCP_SETUP.md)** - 完整配置和使用教程
 - 🤝 **[贡献指南](CONTRIBUTING.md)** - 参与项目开发
 
 ## 🔑 API密钥获取

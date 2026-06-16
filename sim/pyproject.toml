@@ -1,10 +1,63 @@
 [project]
-name = "carla-mcp"
+name = "hutb-mcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "基于 FastMCP 的 HUTB 人车仿真器交互控制系统"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = [
-    "carla>=0.9.15",
-    "mcp>=1.6.0",
+license = {text = "MIT"}
+authors = [
+    {name = "徐杨杨", email = "xuyangyang@hutb.edu.cn"}
 ]
+keywords = ["mcp", "carla", "simulator", "fastmcp", "autonomous-driving"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = [
+    "mcp[cli]>=1.4.1",
+    "python-dotenv>=1.0.0",
+    "pydantic>=2.0.0",
+]
+
+# 注意: carla 需要从本地 wheel 文件安装
+# pip install D:/hutb/PythonAPI/carla/dist/hutb-2.9.16-cp310-cp310-win_amd64.whl
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "hypothesis>=6.0.0",
+    "black>=23.0.0",
+    "isort>=5.0.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+hutb-mcp = "hutb_mcp:main"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hutb_mcp*"]
+
+[tool.black]
+line-length = 100
+target-version = ['py310']
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true

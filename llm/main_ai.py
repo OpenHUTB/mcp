@@ -2614,7 +2614,7 @@ from pathlib import Path
 @app.get("/download/{filename}")
 async def download_file(filename: str):
     """下载生成的文件"""
-    file_path = Path(__file__).parent / filename
+    file_path = Path(__file__).parent / "output" / filename
     if file_path.exists():
         return FileResponse(
             path=file_path,
@@ -3260,7 +3260,6 @@ async def chat(message: str = Form(...)):
 # 创建全局AI助手实例
 assistant = FastMCPGitHubAssistant()
 
-
 def main():
     """主函数 - 支持 Web界面、标准MCP、SSE-MCP 三种启动模式"""
     import sys
@@ -3312,14 +3311,19 @@ async def generate_sumo_network_impl(
     if not sumo_home:
         return "❌ 错误：未设置 SUMO_HOME 环境变量。请在终端中设置：`set SUMO_HOME=D:\\mcp\\sumo\\sumo_install\\sumo-win64-1.27.0\\sumo-1.27.0`"
 
+ # 创建输出目录
+    output_dir = os.path.join(os.path.dirname(__file__), "output")
+    os.makedirs(output_dir, exist_ok=True)
+
     bin_dir = os.path.join(sumo_home, "bin")
     tools_dir = os.path.join(sumo_home, "tools")
 
-    prefix = "web_generated"
+    prefix = os.path.join(output_dir, "web_generated")
     net_file = f"{prefix}.net.xml"
     trips_file = f"{prefix}.trips.xml"
     rou_file = f"{prefix}.rou.xml"
     cfg_file = f"{prefix}.sumocfg"
+    xodr_file = f"{prefix}.xodr"
 
     try:
         # 1. 生成路网
@@ -3382,7 +3386,7 @@ async def generate_sumo_network_impl(
             xodr_msg = f"- OpenDRIVE 转换失败：{e.stderr}"
 
  # 5. 返回结果（修改返回信息，添加 xodr_msg）
-        download_url = f"/download/{xodr_file}"
+        download_url = f"/download/{os.path.basename(xodr_file)}"
         return f"""✅ SUMO 路网和车流生成成功！
 
 📁 生成的文件：

@@ -122,7 +122,7 @@ set "PATH=%VENV_PATH%\Scripts;%VENV_PATH%;%PATH%"
 set "VIRTUAL_ENV=%VENV_PATH%"
 
 REM ===== 设置 SUMO_HOME（相对路径） =====
-set "SUMO_HOME=%PROJECT_ROOT%\sumo\sumo_install\sumo-win64-1.27.0\sumo-1.27.0"
+set "SUMO_HOME=%PROJECT_ROOT%\hutb\sumo"
 echo SUMO_HOME is set to: %SUMO_HOME%
 set "PATH=%SUMO_HOME%\bin;%PATH%"
 REM ======================================

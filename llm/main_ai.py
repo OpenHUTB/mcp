@@ -1969,7 +1969,7 @@ class FastMCPGitHubAssistant:
                     "data": result
                 }
             elif function_name == "generate_sumo_network":
-                result = await generate_sumo_network(
+                result = await generate_sumo_network_impl(
                     grid_x=arguments.get("grid_x", 3),
                     grid_y=arguments.get("grid_y", 3),
                     duration=arguments.get("duration", 200),
@@ -3282,21 +3282,19 @@ async def generate_sumo_network(
     duration: int = 200,
     rate: float = 2.0
 ) -> str:
-    """
-    生成 SUMO 路网和车流。
-    参数：
-    - grid_x: X方向网格数，默认3
-    - grid_y: Y方向网格数，默认3
-    - duration: 仿真时长（秒），默认200
-    - rate: 发车间隔（秒/辆），默认2.0
-    
-    示例：
-    - "生成3x3网格路网，跑200秒，每2秒发一辆车"
-    - "生成4x4网格，跑300秒"
-    """
+    """生成 SUMO 路网和车流。"""
+    return await generate_sumo_network_impl(grid_x, grid_y, duration, rate)
+
+async def generate_sumo_network_impl(
+    grid_x: int = 3,
+    grid_y: int = 3,
+    duration: int = 200,
+    rate: float = 2.0
+) -> str:
+    """SUMO 路网生成实现函数"""
     sumo_home = os.environ.get("SUMO_HOME")
     if not sumo_home:
-        return "❌ 错误：未设置 SUMO_HOME 环境变量。请在终端中设置：`$env:SUMO_HOME = 'D:\\mcp\\sumo\\sumo_install\\sumo-win64-1.27.0\\sumo-1.27.0'`"
+        return "❌ 错误：未设置 SUMO_HOME 环境变量。请在终端中设置：`set SUMO_HOME=D:\\mcp\\sumo\\sumo_install\\sumo-win64-1.27.0\\sumo-1.27.0`"
 
     bin_dir = os.path.join(sumo_home, "bin")
     tools_dir = os.path.join(sumo_home, "tools")

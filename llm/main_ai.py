@@ -17,13 +17,14 @@ import aiohttp
 from typing import Optional
 import carla
 import subprocess
+import os
 # 添加src目录到Python路径
 current_dir = Path(__file__).parent
-sys.path.insert(0, str(current_dir))
+sys.path.insert(0, str(current_dir/ "src"))
 
 from fastmcp import FastMCP
 from src.github_client import GitHubClient
-from src.config import config
+from src.config import config               
 from src.utils.logger import app_logger
 
 # 创建FastMCP实例
@@ -1792,7 +1793,25 @@ class FastMCPGitHubAssistant:
                     }
                 }
             },
-        ]
+
+            {   # ← 新添加的工具
+        "type": "function",
+        "function": {
+            "name": "generate_sumo_network",
+            "description": "生成 SUMO 路网和车流...",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "grid_x": {"type": "integer", "description": "X方向网格数，默认3"},
+                    "grid_y": {"type": "integer", "description": "Y方向网格数，默认3"},
+                    "duration": {"type": "integer", "description": "仿真时长（秒），默认200"},
+                    "rate": {"type": "number", "description": "发车间隔（秒/辆），默认2.0"}
+                },
+                "required": []
+            }
+        }
+    }
+ ]
 
     def process_markdown(self, text):
         """在Python端处理Markdown格式"""
@@ -1945,6 +1964,17 @@ class FastMCPGitHubAssistant:
                 }
             elif function_name == "stop_recording":
                 result = await stop_recording_impl()
+                return {
+                    "success": True,
+                    "data": result
+                }
+            elif function_name == "generate_sumo_network":
+                result = await generate_sumo_network_impl(
+                    grid_x=arguments.get("grid_x", 3),
+                    grid_y=arguments.get("grid_y", 3),
+                    duration=arguments.get("duration", 200),
+                    rate=arguments.get("rate", 2.0)
+                )
                 return {
                     "success": True,
                     "data": result
@@ -2144,15 +2174,24 @@ class FastMCPGitHubAssistant:
         "跑步者": "jogger",
         "跑步的人": "jogger"
     }
-
     def _check_spawn_intent(self, message):
-        """检测用户是否有生成车辆或行人的意图，但缺少必要参数
 
-        只有当缺少类型时才询问，数量默认为1，不询问
-        """
+        """检测用户是否有生成车辆或行人的意图，但缺少必要参数"""
         message = message.lower()
 
-        # 首先排除视角控制相关的指令（这些不是生成请求）
+        # 首先排除 SUMO 路网生成相关的指令
+        sumo_keywords = ['路网', '网格', 'sumo', '仿真', '交通']
+        for kw in sumo_keywords:
+            if kw in message:
+                return {
+                    'needs_vehicle_type': False,
+                    'needs_vehicle_count': False,
+                    'needs_pedestrian_type': False,
+                    'needs_pedestrian_count': False,
+                    'is_ambiguous': False
+                }
+
+        # 排除视角控制相关的指令
         view_keywords = ['视角', '切换', '人称', '俯视', '鸟瞰', '自由视角', '录制', '录像', '视频']
         if any(kw in message for kw in view_keywords):
             return {
@@ -2165,31 +2204,22 @@ class FastMCPGitHubAssistant:
 
         # 车辆相关关键词
         vehicle_keywords = ['车', '车辆', '汽车', '生成车', '创建车', '来车', '加车', '添加车辆']
-        # 行人相关关键词（更精确，避免误判）
         pedestrian_keywords = ['行人', '生成行人', '创建行人', '添加行人', '路人']
-        # 单独的"人"字需要结合生成类动词才认为是生成行人
         person_spawn_verbs = ['生成', '创建', '来', '加', '添加', '放', 'spawn']
 
-        # 数量相关模式
         import re
         has_count = bool(re.search(r'\d+\s*[辆个]', message))
 
-        # 检测车辆类型（支持英文和中文）
         has_vehicle_type = any(vtype in message for vtype in self.VEHICLE_TYPES.keys()) or \
                            any(vname in message for vname in self.VEHICLE_TYPE_MAP.keys())
-        # 检测行人类型（支持英文和中文）- 但排除泛指的"行人"
         specific_pedestrian_keywords = set(self.PEDESTRIAN_TYPES.keys()) | set(self.PEDESTRIAN_TYPE_MAP.keys()) - {"行人", "人"}
         has_pedestrian_type = any(ptype in message for ptype in specific_pedestrian_keywords)
 
-        # 检查是否是模糊的车辆生成请求
         is_vehicle_request = any(kw in message for kw in vehicle_keywords)
 
-        # 检查是否是模糊的行人生成请求
         is_pedestrian_request = any(kw in message for kw in pedestrian_keywords)
-        # 单独的"人"需要配合生成动词才算
         if not is_pedestrian_request and '人' in message:
             has_spawn_verb = any(verb in message for verb in person_spawn_verbs)
-            # 排除"人称"（第一人称、第三人称等）
             if has_spawn_verb and '人称' not in message:
                 is_pedestrian_request = True
 
@@ -2201,16 +2231,14 @@ class FastMCPGitHubAssistant:
             'is_ambiguous': False
         }
 
-        # 如果是车辆请求但没有指定类型，需要询问
         if is_vehicle_request and not has_vehicle_type:
             result['needs_vehicle_type'] = True
-            result['needs_vehicle_count'] = not has_count  # 记录是否也缺少数量
+            result['needs_vehicle_count'] = not has_count
             result['is_ambiguous'] = True
 
-        # 如果是行人请求但没有指定类型，需要询问
         if is_pedestrian_request and not has_pedestrian_type:
             result['needs_pedestrian_type'] = True
-            result['needs_pedestrian_count'] = not has_count  # 记录是否也缺少数量
+            result['needs_pedestrian_count'] = not has_count
             result['is_ambiguous'] = True
 
         return result
@@ -3010,7 +3038,7 @@ def get_web_interface():
             <div class="chat-container">
                 <div class="messages" id="messages">
                     <div class="example-questions">
-                        <div class="welcome-message">
+                         <div class="welcome-message">
                             👋 欢迎使用基于FastMCP框架的 HUTB 模拟器智能助手！集成 HUTB 仿真控制。
                             <br><br>
                             🔧 <strong>技术特色</strong>：本助手使用FastMCP装饰器实现工具定义，提供类型安全、自动化的MCP体验！
@@ -3030,9 +3058,19 @@ def get_web_interface():
                                 🚗 生成车辆
                             </div>
                         </div>
-                    </div>
-                </div>
 
+                        <!-- SUMO 功能（新增） -->
+                         <div style="margin-top: 15px; border-top: 2px dashed #ff6b35; padding-top: 10px;">
+                           <h3 style="color: #ff6b35;">🚦 SUMO 交通仿真（新增功能）</h3>
+                             <div class="examples-grid">
+                                <div class="example-item" style="border-left-color: #ff6b35;" onclick="askExample('生成一个3x3网格路网，跑200秒，每2秒发一辆车')">
+                         🚦 生成默认网格路网
+                          </div>
+                       </div>
+    <div style="margin-top: 8px; font-size: 0.85em; color: #666; text-align: center;">
+        💡 也支持自然语言自定义参数：<em>"生成4x4网格路网，跑300秒"</em> 或 <em>"生成5x5网格路网，跑500秒，每3秒发一辆车"</em>
+    </div>
+</div>
                 <div class="loading" id="loading">
                     <div class="loading-content">
                         <div class="loading-text">
@@ -3237,5 +3275,103 @@ def main():
         print(f"[INFO] 访问地址: http://{host_ip}:3000")
         uvicorn.run(app='main_ai:app', host=host_ip, port=3000, reload=True)
 
+@mcp.tool()
+async def generate_sumo_network(
+    grid_x: int = 3,
+    grid_y: int = 3,
+    duration: int = 200,
+    rate: float = 2.0
+) -> str:
+    """生成 SUMO 路网和车流。"""
+    return await generate_sumo_network_impl(grid_x, grid_y, duration, rate)
+
+async def generate_sumo_network_impl(
+    grid_x: int = 3,
+    grid_y: int = 3,
+    duration: int = 200,
+    rate: float = 2.0
+) -> str:
+    """SUMO 路网生成实现函数"""
+    sumo_home = os.environ.get("SUMO_HOME")
+    if not sumo_home:
+        return "❌ 错误：未设置 SUMO_HOME 环境变量。请在终端中设置：`set SUMO_HOME=D:\\mcp\\sumo\\sumo_install\\sumo-win64-1.27.0\\sumo-1.27.0`"
+
+    bin_dir = os.path.join(sumo_home, "bin")
+    tools_dir = os.path.join(sumo_home, "tools")
+
+    prefix = "web_generated"
+    net_file = f"{prefix}.net.xml"
+    trips_file = f"{prefix}.trips.xml"
+    rou_file = f"{prefix}.rou.xml"
+    cfg_file = f"{prefix}.sumocfg"
+
+    try:
+        # 1. 生成路网
+        subprocess.run([
+            os.path.join(bin_dir, "netgenerate"),
+            "--grid",
+            f"--grid-x-number={grid_x}",
+            f"--grid-y-number={grid_y}",
+            f"--grid-x-length=500",
+            f"--grid-y-length=500",
+            f"--output-file={net_file}"
+        ], check=True, capture_output=True, text=True)
+
+        # 2. 生成出行
+        subprocess.run([
+            "python",
+            os.path.join(tools_dir, "randomTrips.py"),
+            f"-n={net_file}",
+            f"-e={duration}",
+            "-l",
+            f"-p={rate}",
+            f"-o={trips_file}"
+        ], check=True, capture_output=True, text=True)
+
+        # 3. 生成路由
+        subprocess.run([
+            os.path.join(bin_dir, "duarouter"),
+            f"-n={net_file}",
+            f"-t={trips_file}",
+            f"-o={rou_file}",
+            "--ignore-errors"
+        ], check=True, capture_output=True, text=True)
+
+        # 4. 创建配置文件
+        with open(cfg_file, "w", encoding="utf-8") as f:
+            f.write(f'''<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <input>
+        <net-file value="{net_file}"/>
+        <route-files value="{rou_file}"/>
+    </input>
+    <time>
+        <begin value="0"/>
+        <end value="{duration}"/>
+    </time>
+</configuration>
+''')
+
+        return f"""✅ SUMO 路网和车流生成成功！
+
+📁 生成的文件：
+- 路网: {net_file}
+- 出行: {trips_file}
+- 路由: {rou_file}
+- 配置: {cfg_file}
+
+📊 参数：
+- 网格: {grid_x}x{grid_y}
+- 仿真时长: {duration} 秒
+- 发车间隔: {rate} 秒/辆
+
+▶️ 在终端中运行以下命令查看：
+cd D:\\mcp\\sumo
+sumo-gui -c {cfg_file}
+"""
+
+    except subprocess.CalledProcessError as e:
+        return f"❌ 生成失败：{e.stderr}"
+    
 if __name__ == "__main__":
     main()

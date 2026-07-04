@@ -121,6 +121,12 @@ REM Set environment variables
 set "PATH=%VENV_PATH%\Scripts;%VENV_PATH%;%PATH%"
 set "VIRTUAL_ENV=%VENV_PATH%"
 
+REM ===== 设置 SUMO_HOME（相对路径） =====
+set "SUMO_HOME=%PROJECT_ROOT%\hutb\sumo"
+echo SUMO_HOME is set to: %SUMO_HOME%
+set "PATH=%SUMO_HOME%\bin;%PATH%"
+REM ======================================
+
 REM Check if OpenCV (cv2) is installed
 echo Checking OpenCV (cv2)...
 "%PYTHON_EXE%" "%PROJECT_ROOT%\llm\check_opencv.py"

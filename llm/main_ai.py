@@ -2607,6 +2607,22 @@ CARLA相关：
 
 app = FastAPI(title="FastMCP GitHub Assistant")
 
+# ===== 新增：文件下载接口 =====
+from fastapi.responses import FileResponse
+from pathlib import Path
+
+@app.get("/download/{filename}")
+async def download_file(filename: str):
+    """下载生成的文件"""
+    file_path = Path(__file__).parent / filename
+    if file_path.exists():
+        return FileResponse(
+            path=file_path,
+            filename=filename,
+            media_type="application/octet-stream"
+        )
+    return {"error": "文件不存在"}
+# ===== 新增结束 =====
 
 def get_web_interface():
     """生成AI对话Web界面HTML"""
@@ -3352,6 +3368,21 @@ async def generate_sumo_network_impl(
 </configuration>
 ''')
 
+ # 4.5 转换为 OpenDRIVE 格式
+        xodr_file = f"{prefix}.xodr"
+        xodr_msg = ""
+        try:
+            subprocess.run([
+                os.path.join(bin_dir, "netconvert"),
+                f"--sumo-net-file={net_file}",
+                f"--opendrive-output={xodr_file}"
+            ], check=True, capture_output=True, text=True)
+            xodr_msg = f"- OpenDRIVE: {xodr_file}"
+        except subprocess.CalledProcessError as e:
+            xodr_msg = f"- OpenDRIVE 转换失败：{e.stderr}"
+
+ # 5. 返回结果（修改返回信息，添加 xodr_msg）
+        download_url = f"/download/{xodr_file}"
         return f"""✅ SUMO 路网和车流生成成功！
 
 📁 生成的文件：
@@ -3359,11 +3390,15 @@ async def generate_sumo_network_impl(
 - 出行: {trips_file}
 - 路由: {rou_file}
 - 配置: {cfg_file}
+{xodr_msg}
 
 📊 参数：
 - 网格: {grid_x}x{grid_y}
 - 仿真时长: {duration} 秒
 - 发车间隔: {rate} 秒/辆
+
+📥 下载链接：
+- [点击下载 OpenDRIVE 文件]({download_url})
 
 ▶️ 在终端中运行以下命令查看：
 cd D:\\mcp\\sumo

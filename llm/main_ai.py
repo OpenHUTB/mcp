@@ -18,6 +18,9 @@ from typing import Optional
 import carla
 import subprocess
 import os
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from fastapi.responses import FileResponse
 # 添加src目录到Python路径
 current_dir = Path(__file__).parent
 sys.path.insert(0, str(current_dir/ "src"))
@@ -1782,7 +1785,7 @@ class FastMCPGitHubAssistant:
                     }
                 }
             },
-            {
+             {
                 "type": "function",
                 "function": {
                     "name": "stop_recording",
@@ -1793,25 +1796,41 @@ class FastMCPGitHubAssistant:
                     }
                 }
             },
-
-            {   # ← 新添加的工具
-        "type": "function",
-        "function": {
-            "name": "generate_sumo_network",
-            "description": "生成 SUMO 路网和车流...",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "grid_x": {"type": "integer", "description": "X方向网格数，默认3"},
-                    "grid_y": {"type": "integer", "description": "Y方向网格数，默认3"},
-                    "duration": {"type": "integer", "description": "仿真时长（秒），默认200"},
-                    "rate": {"type": "number", "description": "发车间隔（秒/辆），默认2.0"}
-                },
-                "required": []
+             {
+                "type": "function",
+                "function": {
+                    "name": "generate_sumo_network",
+                    "description": "生成 SUMO 路网和车流。当用户提到'路网'、'网格'、'SUMO'时，必须使用此工具。不要将其与 CARLA 车辆生成混淆。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "grid_x": {"type": "integer", "description": "X方向网格数，默认3"},
+                            "grid_y": {"type": "integer", "description": "Y方向网格数，默认3"},
+                            "duration": {"type": "integer", "description": "仿真时长（秒），默认200"},
+                            "rate": {"type": "number", "description": "发车间隔（秒/辆），默认2.0"}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "generate_openscenario",
+                    "description": "生成 OpenSCENARIO 场景文件。参数：xodr_filename(OpenDRIVE文件名，留空则使用内建直路), scenario_name(场景名称), duration(仿真秒数), vehicle_speed(车辆速度m/s)。示例：'生成一个场景，基于 web_generated.xodr，车以10m/s行驶30秒'",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "xodr_filename": {"type": "string", "description": "OpenDRIVE文件名，默认空字符串（使用内建直路）"},
+                            "scenario_name": {"type": "string", "description": "场景名称，默认my_scenario"},
+                            "duration": {"type": "number", "description": "仿真时长（秒），默认30"},
+                            "vehicle_speed": {"type": "number", "description": "车辆速度（m/s），默认10"}
+                        },
+                        "required": []
+                    }
+                }
             }
-        }
-    }
- ]
+        ] 
 
     def process_markdown(self, text):
         """在Python端处理Markdown格式"""
@@ -1979,6 +1998,16 @@ class FastMCPGitHubAssistant:
                     "success": True,
                     "data": result
                 }
+            
+            elif function_name == "generate_openscenario":
+                result = await generate_openscenario_impl(
+                    xodr_filename=arguments.get("xodr_filename", ""),
+                    scenario_name=arguments.get("scenario_name", "my_scenario"),
+                    duration=arguments.get("duration", 30.0),
+                    vehicle_speed=arguments.get("vehicle_speed", 10.0)
+                )
+                return {"success": True, "data": result}
+
             elif function_name == "search_github_repositories":
                 result = await search_github_repositories_impl(
                     query=arguments["query"],
@@ -2180,7 +2209,7 @@ class FastMCPGitHubAssistant:
         message = message.lower()
 
         # 首先排除 SUMO 路网生成相关的指令
-        sumo_keywords = ['路网', '网格', 'sumo', '仿真', '交通']
+        sumo_keywords = ['路网', '网格', 'sumo', '仿真', '交通', '场景']
         for kw in sumo_keywords:
             if kw in message:
                 return {
@@ -2428,10 +2457,16 @@ class FastMCPGitHubAssistant:
 
         # 初始消息
         messages = [
-            {
-                "role": "system",
-                "content": """你是一个GitHub搜索助手，基于FastMCP框架提供服务。你有以下工具可以使用：
+    {
+        "role": "system",
+        "content": """## 🚦 关键路由规则（必须严格遵守）
 
+- 如果用户消息中包含 "路网"、"网格"、"SUMO"、"生成路网" 这些词，**必须**调用 `generate_sumo_network` 工具。
+- 如果用户消息中包含 "场景"、"OpenSCENARIO"、"生成场景"，**必须**调用 `generate_openscenario` 工具，**不要**将其理解为车辆生成。
+- 如果用户消息中包含 "连接CARLA"、"CARLA服务器"，调用 `connect_carla` 工具。
+- **绝对不要**将"路网"或"网格"理解为 CARLA 车辆生成请求。
+
+你是一个GitHub搜索助手，基于FastMCP框架提供服务。你有以下工具可以使用：
 
 CARLA仿真功能：
 5. connect_carla - 连接CARLA服务器（默认localhost:2000）
@@ -2445,6 +2480,7 @@ CARLA仿真功能：
 13. switch_view - 切换视角模式，支持 third_person(第三人称跟随), first_person(第一人称), overhead(俯视/鸟瞰), free(自由视角), bystander(旁观者视角)
 14. start_recording - 开始视频录制，录制当前窗口视角的内容
 15. stop_recording - 停止视频录制
+16. generate_openscenario - 基于已有的 OpenDRIVE 文件生成 OpenSCENARIO 场景文件。当用户提到"场景"、"OpenSCENARIO"、"生成场景"、"仿真场景"时使用。参数：xodr_filename(OpenDRIVE文件名), scenario_name(场景名称), duration(仿真时长秒), vehicle_speed(车辆速度m/s)
 
 
 CARLA相关：
@@ -2542,10 +2578,12 @@ CARLA相关：
 - 当用户要求生成车辆时，直接调用spawn_vehicle，不要先调用connect_carla
 - 只有当用户明确要求连接服务器时，才调用connect_carla
 
-本助手基于FastMCP框架构建，提供高效、类型安全的工具调用体验。"""
-            },
-            {"role": "user", "content": user_message}
-        ]
+本助手基于FastMCP框架构建，提供高效、类型安全的工具调用体验。
+"""
+    },
+    {"role": "user", "content": user_message}
+]
+
 
         # 第一次API调用
         app_logger.info(f"💬 用户消息: {user_message}")
@@ -3076,13 +3114,18 @@ def get_web_interface():
                         </div>
 
                         <!-- SUMO 功能（新增） -->
-                         <div style="margin-top: 15px; border-top: 2px dashed #ff6b35; padding-top: 10px;">
-                           <h3 style="color: #ff6b35;">🚦 SUMO 交通仿真（新增功能）</h3>
-                             <div class="examples-grid">
-                                <div class="example-item" style="border-left-color: #ff6b35;" onclick="askExample('生成一个3x3网格路网，跑200秒，每2秒发一辆车')">
-                         🚦 生成默认网格路网
-                          </div>
-                       </div>
+<div style="margin-top: 15px; border-top: 2px dashed #ff6b35; padding-top: 10px;">
+    <h3 style="color: #ff6b35;">🚦 SUMO 交通仿真（新增功能）</h3>
+    <div class="examples-grid">
+        <!-- 原有的路网生成按钮 -->
+        <div class="example-item" style="border-left-color: #ff6b35;" onclick="askExample('生成一个3x3网格路网，跑200秒，每2秒发一辆车')">
+            🚦 生成默认网格路网
+        </div>
+        <!-- 新增 OpenSCENARIO 生成按钮 -->
+        <div class="example-item" style="border-left-color: #ff6b35;" onclick="askExample('生成一个场景，基于 web_generated.xodr，车以10m/s行驶30秒')">
+            🎬 生成 OpenSCENARIO 场景
+        </div>
+    </div>
     <div style="margin-top: 8px; font-size: 0.85em; color: #666; text-align: center;">
         💡 也支持自然语言自定义参数：<em>"生成4x4网格路网，跑300秒"</em> 或 <em>"生成5x5网格路网，跑500秒，每3秒发一辆车"</em>
     </div>
@@ -3412,5 +3455,117 @@ sumo-gui -c {cfg_file}
     except subprocess.CalledProcessError as e:
         return f"❌ 生成失败：{e.stderr}"
     
+# ============ OpenSCENARIO 场景生成功能（新增） ============
+
+async def generate_openscenario_impl(
+    xodr_filename: str = "",
+    scenario_name: str = "my_scenario",
+    duration: float = 30.0,
+    vehicle_speed: float = 10.0
+) -> str:
+    """
+    生成 OpenSCENARIO 场景文件（支持外部 .xodr 或内建直路）。
+    """
+    import xml.etree.ElementTree as ET
+    import os
+    from datetime import datetime
+
+    output_dir = os.path.join(os.path.dirname(__file__), "output")
+    os.makedirs(output_dir, exist_ok=True)
+
+    try:
+        root = ET.Element("OpenSCENARIO", {
+            "xmlns:xsi": "http://www.w3.org/2001/XMLSchema-instance",
+            "xsi:noNamespaceSchemaLocation": "http://www.asam.net/xml/OpenSCENARIO/1.0.0/OpenSCENARIO.xsd"
+        })
+
+        header = ET.SubElement(root, "FileHeader", {
+            "revMajor": "1",
+            "revMinor": "0",
+            "date": datetime.now().isoformat(),
+            "description": f"Scenario: {scenario_name}",
+            "author": "MCP Assistant"
+        })
+
+        # 路网
+        road_network = ET.SubElement(root, "RoadNetwork")
+        if xodr_filename:
+            # 使用外部 OpenDRIVE 文件
+            xodr_path = os.path.join(output_dir, xodr_filename)
+            if not os.path.exists(xodr_path):
+                return f"❌ 错误：找不到 OpenDRIVE 文件 {xodr_filename}，请先生成路网。"
+            ET.SubElement(road_network, "LogicFile", {"filepath": xodr_path})
+        # 否则不添加 LogicFile，CARLA 会使用默认地图
+
+        # 实体
+        entities = ET.SubElement(root, "Entities")
+        obj = ET.SubElement(entities, "ScenarioObject", {"name": "ego_vehicle"})
+        vehicle = ET.SubElement(obj, "Vehicle", {"name": "ego_vehicle", "vehicleCategory": "car"})
+        ET.SubElement(vehicle, "Performance", {"maxSpeed": "20", "maxAcceleration": "5", "maxDeceleration": "5"})
+
+        # 故事板
+        storyboard = ET.SubElement(root, "Storyboard")
+
+        # 初始化：车辆放在原点
+        init = ET.SubElement(storyboard, "Init")
+        private = ET.SubElement(init, "Private", {"entityRef": "ego_vehicle"})
+        action = ET.SubElement(private, "Action")
+        teleport = ET.SubElement(action, "TeleportAction")
+        pos = ET.SubElement(teleport, "Position")
+        ET.SubElement(pos, "WorldPosition", {"x": "0.0", "y": "0.0", "z": "0.0", "h": "0.0"})
+
+        # 故事：匀速行驶
+        story = ET.SubElement(storyboard, "Story", {"name": "drive_story"})
+        act = ET.SubElement(story, "Act", {"name": "drive_act"})
+        maneuver = ET.SubElement(act, "Maneuver", {"name": "drive_maneuver"})
+        event = ET.SubElement(maneuver, "Event", {"name": "speed_event", "priority": "overwrite"})
+
+        action = ET.SubElement(event, "Action")
+        speed_action = ET.SubElement(action, "SpeedAction")
+        ET.SubElement(speed_action, "SpeedActionDynamics", {"dynamicsShape": "step", "value": "0.0"})
+        target = ET.SubElement(speed_action, "SpeedActionTarget")
+        ET.SubElement(target, "AbsoluteSpeed", {"value": str(vehicle_speed)})
+
+        # 开始触发
+        start = ET.SubElement(event, "StartTrigger")
+        cond_group = ET.SubElement(start, "ConditionGroup")
+        cond = ET.SubElement(cond_group, "Condition", {"rule": "greaterThan", "edge": "rising"})
+        by_val = ET.SubElement(cond, "ByValueCondition")
+        ET.SubElement(by_val, "SimulationTimeCondition", {"value": "0.0"})
+
+        # 结束触发
+        stop = ET.SubElement(event, "StopTrigger")
+        stop_group = ET.SubElement(stop, "ConditionGroup")
+        stop_cond = ET.SubElement(stop_group, "Condition", {"rule": "greaterThan", "edge": "rising"})
+        stop_by_val = ET.SubElement(stop_cond, "ByValueCondition")
+        ET.SubElement(stop_by_val, "SimulationTimeCondition", {"value": str(duration)})
+
+        tree = ET.ElementTree(root)
+        output_file = os.path.join(output_dir, f"{scenario_name}.xosc")
+        tree.write(output_file, encoding="UTF-8", xml_declaration=True)
+
+        return f"""✅ OpenSCENARIO 场景文件生成成功！
+
+📁 文件路径: {output_file}
+📊 文件大小: {os.path.getsize(output_file)} 字节
+
+📥 下载链接：
+<a href="/download/{scenario_name}.xosc" target="_blank">点击下载 {scenario_name}.xosc</a>
+
+▶️ 可直接在 CARLA 的 OpenSCENARIO 播放器中运行。
+"""
+    except Exception as e:
+        return f"❌ 生成失败: {str(e)}"
+    # 2. 工具函数（有 @mcp.tool() 装饰器）
+@mcp.tool()
+async def generate_openscenario(
+    xodr_filename: str = "web_generated.xodr",
+    scenario_name: str = "my_scenario",
+    duration: float = 30.0,
+    vehicle_speed: float = 10.0
+) -> str:
+    """生成 OpenSCENARIO 场景文件。"""
+    return await generate_openscenario_impl(xodr_filename, scenario_name, duration, vehicle_speed)
+
 if __name__ == "__main__":
     main()

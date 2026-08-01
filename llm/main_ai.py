@@ -57,6 +57,10 @@ class CarlaClient:
         self.view_target = None  # 当前视角跟随的目标
         self.view_follow_task = None  # 视角跟随任务
         self.is_view_following = False  # 是否正在跟随视角
+        # 修复3+8: 行人状态管理
+        self.walker_controllers = {}   # {walker_id: controller_actor}
+        self.walker_goals = {}         # {walker_id: {'last_loc':..., 'stuck':0, 'target':...}}
+        self.walker_check_interval = 0
 
     async def connect(self, host='localhost', port=2000):
         """连接CARLA服务器"""
@@ -124,6 +128,7 @@ class CarlaClient:
             while self.is_ticking and self.world:
                 try:
                     self.world.tick()
+                    self.check_and_fix_stuck_walkers()  # 修复3: 检测行人卡住
                     await asyncio.sleep(0.05)  # 20 FPS
                 except Exception as e:
                     app_logger.warning(f"⚠️ tick时出错: {e}")
@@ -497,6 +502,14 @@ class CarlaClient:
                                         controller.set_max_speed(speed)
                                         app_logger.info(f"🎯 为行人设置随机目标位置，速度: {speed} m/s")
                                         
+                                        # 修复3+8: 保存控制器引用，用于后续检测和恢复
+                                        self.walker_controllers[pedestrian.id] = controller
+                                        self.walker_goals[pedestrian.id] = {
+                                            'last_location': pedestrian.get_location(),
+                                            'stuck_count': 0,
+                                            'target': target_location
+                                        }
+
                                         # 存储控制器和行人的关联关系
                                         self.actors.append(pedestrian)
                                         self.actors.append(controller)
@@ -724,6 +737,55 @@ class CarlaClient:
                 actor.destroy()
         self.actors = []
         app_logger.info("🧹 清理所有CARLA actor")
+
+        # ============ 修复3: 行人卡住检测与自动修复 ============
+    def check_and_fix_stuck_walkers(self):
+        """每帧检测行人是否卡住，若卡住则重新设置目标"""
+        self.walker_check_interval += 1
+        if self.walker_check_interval < 30:
+            return
+        self.walker_check_interval = 0
+        
+        for walker_id, info in list(self.walker_goals.items()):
+            walker = self.world.get_actor(walker_id)
+            if walker is None or not walker.is_alive:
+                del self.walker_goals[walker_id]
+                if walker_id in self.walker_controllers:
+                    del self.walker_controllers[walker_id]
+                continue
+            
+            current_loc = walker.get_location()
+            last_loc = info['last_location']
+            distance = current_loc.distance(last_loc)
+            
+            if distance < 0.15:
+                info['stuck_count'] += 1
+            else:
+                info['stuck_count'] = 0
+                info['last_location'] = current_loc
+            
+            if info['stuck_count'] >= 3:
+                controller = self.walker_controllers.get(walker_id)
+                if controller and controller.is_alive:
+                    new_target = self.world.get_random_location_from_navigation()
+                    if new_target:
+                        controller.go_to_location(new_target)
+                        info['target'] = new_target
+                        info['stuck_count'] = 0
+                        info['last_location'] = current_loc
+                        app_logger.info(f"[修复3] 行人 {walker_id} 原地踏步，已重新设置目标")
+                    else:
+                        import random
+                        fallback = carla.Location(
+                            x=current_loc.x + random.uniform(-15, 15),
+                            y=current_loc.y + random.uniform(-15, 15),
+                            z=current_loc.z
+                        )
+                        controller.go_to_location(fallback)
+                        info['target'] = fallback
+                        info['stuck_count'] = 0
+                        info['last_location'] = current_loc
+                        app_logger.info(f"[修复3] 行人 {walker_id} 原地踏步，已设置备用目标")
 
     # ============ 视角控制功能 ============
 

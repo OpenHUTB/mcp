@@ -897,6 +897,7 @@ class CarlaClient:
 
         try:
             spectator = self.world.get_spectator()
+            self.view_target = target_actor  # 修复4: 保存追踪目标
 
             if target_actor:
                 target_location = target_actor.get_transform().location
@@ -918,7 +919,8 @@ class CarlaClient:
 
             camera_transform = carla.Transform(camera_location, camera_rotation)
             spectator.set_transform(camera_transform)
-            app_logger.info(f"👁️  俯视视角已设置 - 高度: {height}m")
+            app_logger.info(f"👁️  俯视视角已设置 - 高度: {height}m" + 
+                          (f"，追踪目标ID={target_actor.id}" if target_actor else ""))
             return True
         except Exception as e:
             app_logger.error(f"❌ 设置俯视视角失败: {str(e)}")
@@ -1058,11 +1060,14 @@ class CarlaClient:
                     app_logger.warning(f"⚠️ 视角目标 {target_actor.id} 已不存在，停止跟随")
                     break
 
-                # 根据视角模式更新视角
+                      # 根据视角模式更新视角
                 if view_mode == "third_person":
                     self._update_third_person_view(target_actor)
                 elif view_mode == "first_person":
                     self._update_first_person_view(target_actor)
+                elif view_mode == "overhead":      # 修复4: 新增 overhead 跟随
+                    self._update_overhead_view(target_actor)
+
 
                 # 每50ms更新一次（约20fps）
                 await asyncio.sleep(0.05)
@@ -1136,6 +1141,41 @@ class CarlaClient:
             spectator.set_transform(camera_transform)
         except Exception as e:
             app_logger.warning(f"⚠️ 更新第一人称视角出错: {e}")
+
+
+    def get_all_pedestrians(self):
+        """获取当前世界中所有行人列表"""
+        if self.world is None:
+            return []
+
+        pedestrians = []
+        try:
+            for actor in self.world.get_actors():
+                if 'walker' in actor.type_id and 'controller' not in actor.type_id:
+                    type_name = self._get_pedestrian_type_name(actor.type_id)
+                    pedestrians.append({
+                        'id': actor.id,
+                        'type_id': actor.type_id,
+                        'type_name': type_name
+                    })
+        except Exception as e:
+            app_logger.error(f"❌ 获取行人列表失败: {str(e)}")
+
+        return pedestrians
+
+    def _update_overhead_view(self, target_actor, height=30.0):
+        """更新俯视视角位置（用于跟随目标）"""
+        try:
+            spectator = self.world.get_spectator()
+            target_location = target_actor.get_transform().location
+            camera_location = carla.Location(
+                x=target_location.x, y=target_location.y, z=target_location.z + height
+            )
+            camera_rotation = carla.Rotation(pitch=-90.0, yaw=0.0, roll=0.0)
+            camera_transform = carla.Transform(camera_location, camera_rotation)
+            spectator.set_transform(camera_transform)
+        except Exception as e:
+            app_logger.warning(f"⚠️ 更新俯视视角出错: {e}")
 
     def get_all_pedestrians(self):
         """获取当前世界中所有行人列表
@@ -1467,12 +1507,20 @@ class CarlaClient:
             else:
                 result = "❌ 第一人称视角需要指定目标"
 
+        
         elif view_mode == "overhead":
             # 停止之前的跟随
             await self.stop_view_follow()
             self.set_overhead_view(target_actor)
             self.current_view_mode = "overhead"
-            result = "✅ 已切换到俯视视角"
+            # 修复4: 如果有目标，启动跟随
+            if target_actor:
+                self.view_follow_task = asyncio.create_task(
+                    self.start_view_follow("overhead", target_actor)
+                )
+                result = f"✅ 已切换到俯视视角 - 目标: {target_actor.id} (已启用跟随)"
+            else:
+                result = "✅ 已切换到俯视视角"
 
         elif view_mode == "free":
             # 停止之前的跟随
@@ -2285,6 +2333,17 @@ class FastMCPGitHubAssistant:
         # 排除视角控制相关的指令
         view_keywords = ['视角', '切换', '人称', '俯视', '鸟瞰', '自由视角', '录制', '录像', '视频']
         if any(kw in message for kw in view_keywords):
+            return {
+                'needs_vehicle_type': False,
+                'needs_vehicle_count': False,
+                'needs_pedestrian_type': False,
+                'needs_pedestrian_count': False,
+                'is_ambiguous': False
+            }
+
+         # 排除自动驾驶相关指令（不是生成车辆）
+        autopilot_keywords = ['自动驾驶', '车辆运行', '车自己开', '开启自动驾驶', '让车', '让车辆']
+        if any(kw in message for kw in autopilot_keywords):
             return {
                 'needs_vehicle_type': False,
                 'needs_vehicle_count': False,

@@ -2730,6 +2730,7 @@ def get_web_interface():
             }
 
             .messages {
+                order: 1;
                 flex: 1;
                 overflow-y: auto;
                 overflow-x: hidden;
@@ -2824,6 +2825,10 @@ def get_web_interface():
             }
 
             .input-form {
+                order: 2;              /* ← 新增：输入框永远排在消息区下面 */
+                position: sticky;      /* ← 新增：吸附在可视区域底部 */
+                bottom: 0;             /* ← 新增 */
+                z-index: 10;           /* ← 新增：不被消息盖住 */
                 display: flex;
                 gap: 12px;
                 align-items: flex-end;
@@ -3130,6 +3135,8 @@ def get_web_interface():
         💡 也支持自然语言自定义参数：<em>"生成4x4网格路网，跑300秒"</em> 或 <em>"生成5x5网格路网，跑500秒，每3秒发一辆车"</em>
     </div>
 </div>
+</div> 
+                </div>
                 <div class="loading" id="loading">
                     <div class="loading-content">
                         <div class="loading-text">
@@ -3153,6 +3160,17 @@ def get_web_interface():
                 </form>
             </div>
         </div>
+
+        <script>
+    function scrollToBottom() {
+        var box = document.getElementById('messages');
+        if (box) box.scrollTop = box.scrollHeight;
+    }
+    window.addEventListener('load', scrollToBottom);
+    var observer = new MutationObserver(scrollToBottom);
+    var msgBox = document.getElementById('messages');
+    if (msgBox) observer.observe(msgBox, { childList: true, subtree: true });
+    </script>
 
 <script>
 function askExample(text) {

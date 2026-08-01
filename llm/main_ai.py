@@ -151,182 +151,78 @@ class CarlaClient:
         await self.set_synchronous_mode(False)
         
         app_logger.info("🛑 停止后台tick循环")
-
-    async def spawn_vehicles(self, vehicle_type='model3', count=1):
-        """生成多辆车辆，返回生成的车辆列表和最后一辆车
-        
-        支持的车辆类型:
-        - tesla: model3
-        - audi: a2, etron, tt
-        - bmw: grandtourer, i8, mini
-        - chevrolet: impala
-        - citroen: c3
-        - dodge: charger_police, charger2020
-        - ford: mustang, crown
-        - jeep: wrangler_rubicon
-        - lincoln: mkz_2017, mkz_2020
-        - mercedes: benz_coupe, cabrio, ccc
-        - mini: cooper_s
-        - nissan: micra, patrol
-        - seat: leon
-        - volkswagen: t2, t3
-        
-        数据量支持: 取决于地图生成点数量，通常支持10-100+辆车
-        """
-        # 检查是否已连接到CARLA服务器
+ 
+        async def spawn_vehicles(self, vehicle_type='model3', count=1, autopilot=False):
+            """生成多辆车辆，确保在车道内，返回详细ID列表"""
         if self.world is None:
-            app_logger.error("❌ 未连接到CARLA服务器，请先调用connect_carla")
+            app_logger.error("❌ 未连接到CARLA服务器")
             return []
         
-        try:
-            # 车辆类型到蓝图路径的映射
-            vehicle_blueprints = {
-                # Tesla
-                'model3': 'vehicle.tesla.model3',
-                # Audi
-                'a2': 'vehicle.audi.a2',
-                'etron': 'vehicle.audi.etron',
-                'tt': 'vehicle.audi.tt',
-                # BMW
-                'grandtourer': 'vehicle.bmw.grandtourer',
-                'i8': 'vehicle.bmw.i8',
-                'mini': 'vehicle.bmw.mini',
-                # Chevrolet
-                'impala': 'vehicle.chevrolet.impala',
-                # Citroen
-                'c3': 'vehicle.citroen.c3',
-                # Dodge
-                'charger_police': 'vehicle.dodge.charger_police',
-                'charger2020': 'vehicle.dodge.charger2020',
-                # Ford
-                'mustang': 'vehicle.ford.mustang',
-                'crown': 'vehicle.ford.crown',
-                # Jeep
-                'wrangler_rubicon': 'vehicle.jeep.wrangler_rubicon',
-                # Lincoln
-                'mkz_2017': 'vehicle.lincoln.mkz_2017',
-                'mkz_2020': 'vehicle.lincoln.mkz_2020',
-                # Mercedes
-                'benz_coupe': 'vehicle.mercedes.benz_coupe',
-                'cabrio': 'vehicle.mercedes.cabrio',
-                'ccc': 'vehicle.mercedes.ccc',
-                # Mini
-                'cooper_s': 'vehicle.mini.cooper_s',
-                # Nissan
-                'micra': 'vehicle.nissan.micra',
-                'patrol': 'vehicle.nissan.patrol',
-                # Seat
-                'leon': 'vehicle.seat.leon',
-                # Volkswagen
-                't2': 'vehicle.volkswagen.t2',
-                't3': 'vehicle.volkswagen.t3',
-            }
-            
-            # 获取蓝图路径
-            blueprint_path = vehicle_blueprints.get(vehicle_type.lower(), f'vehicle.tesla.{vehicle_type}')
-            
-            # 获取可用生成点
-            spawn_points = self.world.get_map().get_spawn_points()
-            available_points = len(spawn_points)
-            
-            # 限制生成数量不超过可用生成点
-            actual_count = min(count, available_points)
-            if count > available_points:
-                app_logger.warning(f"⚠️ 请求生成{count}辆车，但地图只有{available_points}个生成点，将生成{actual_count}辆")
-            
-            blueprint_library = self.world.get_blueprint_library()
-            
-            spawned_vehicles = []
-            for i in range(actual_count):
-                try:
-                    # 尝试查找指定蓝图，如果不存在则使用随机车辆蓝图
-                    blueprint = blueprint_library.find(blueprint_path)
-                    if blueprint is None:
-                        # 如果指定蓝图不存在，使用随机车辆蓝图
-                        blueprints = [bp for bp in blueprint_library.filter('vehicle.*') if bp.id.startswith('vehicle.')]
-                        blueprint = blueprints[i % len(blueprints)] if blueprints else None
-                    
-                    if blueprint is None:
-                        app_logger.error(f"❌ 无法找到车辆蓝图")
-                        continue
-                    
-                    # 设置车辆颜色 - 修复颜色格式问题
-                    if blueprint.has_attribute('color'):
-                        # 生成随机的RGB颜色值 (0-255范围)
-                        import random
-                        r = random.randint(0, 255)
-                        g = random.randint(0, 255)
-                        b = random.randint(0, 255)
-                        color_str = f"{r},{g},{b}"
-                        blueprint.set_attribute('color', color_str)
-                        app_logger.info(f"🎨 设置车辆颜色: RGB({color_str})")
-                    
-                    # 设置role_name属性避免错误
-                    if blueprint.has_attribute('role_name'):
-                        blueprint.set_attribute('role_name', 'autopilot')
-                    
-                    # 尝试多个位置生成车辆
-                    spawn_success = False
-                    for attempt in range(10):  # 尝试10个位置
-                        try:
-                            # 使用随机道路位置
-                            spawn_location = self.world.get_random_location_from_navigation()
-                            if not spawn_location:
-                                # 如果无法获取随机道路位置，使用固定生成点
-                                import random
-                                spawn_point = random.choice(spawn_points)
-                                spawn_location = spawn_point.location
-                            
-                            # 为避免碰撞，对位置进行更大范围的随机偏移
-                            import random
-                            offset_x = random.uniform(-3.0, 3.0)
-                            offset_y = random.uniform(-3.0, 3.0)
-                            offset_z = 0.1  # 稍微抬高一点，避免地面碰撞
-                            
-                            # 创建新的变换，添加偏移
-                            from carla import Transform, Location
-                            new_location = Location(
-                                x=spawn_location.x + offset_x,
-                                y=spawn_location.y + offset_y,
-                                z=spawn_location.z + offset_z
-                            )
-                            
-                            # 随机旋转角度
-                            from carla import Rotation
-                            random_yaw = random.uniform(0, 360)
-                            new_rotation = Rotation(yaw=random_yaw)
-                            new_transform = Transform(new_location, new_rotation)
-                            
-                            app_logger.info(f"📍 尝试生成车辆，位置: {new_location}, 朝向: {random_yaw:.1f}°")
-                            
-                            # 尝试生成车辆
-                            vehicle = self.world.try_spawn_actor(blueprint, new_transform)
-                            if vehicle:
-                                self.actors.append(vehicle)
-                                spawned_vehicles.append(vehicle)
-                                app_logger.info(f"🚗 生成第{i+1}辆车: {blueprint.id} (ID: {vehicle.id})")
-                                spawn_success = True
-                                break
-                            else:
-                                app_logger.warning(f"⚠️ 尝试 {attempt+1}/10: 生成车辆失败，位置可能被占用")
-                                
-                        except Exception as loc_error:
-                            app_logger.error(f"❌ 位置生成时出错: {loc_error}")
-                            continue
-                    
-                    if not spawn_success:
-                        app_logger.error(f"❌ 生成第{i+1}辆车失败，已尝试10个位置")
-                        
-                except Exception as e:
-                    app_logger.error(f"❌ 生成第{i+1}辆车时出错: {str(e)}")
+        vehicle_blueprints = {
+            'model3': 'vehicle.tesla.model3', 'a2': 'vehicle.audi.a2',
+            'etron': 'vehicle.audi.etron', 'tt': 'vehicle.audi.tt',
+            'grandtourer': 'vehicle.bmw.grandtourer', 'i8': 'vehicle.bmw.i8',
+            'mini': 'vehicle.bmw.mini', 'impala': 'vehicle.chevrolet.impala',
+            'c3': 'vehicle.citroen.c3', 'charger_police': 'vehicle.dodge.charger_police',
+            'charger2020': 'vehicle.dodge.charger2020', 'mustang': 'vehicle.ford.mustang',
+            'crown': 'vehicle.ford.crown', 'wrangler_rubicon': 'vehicle.jeep.wrangler_rubicon',
+            'mkz_2017': 'vehicle.lincoln.mkz_2017', 'mkz_2020': 'vehicle.lincoln.mkz_2020',
+            'benz_coupe': 'vehicle.mercedes.benz_coupe', 'cabrio': 'vehicle.mercedes.cabrio',
+            'ccc': 'vehicle.mercedes.ccc', 'cooper_s': 'vehicle.mini.cooper_s',
+            'micra': 'vehicle.nissan.micra', 'patrol': 'vehicle.nissan.patrol',
+            'leon': 'vehicle.seat.leon', 't2': 'vehicle.volkswagen.t2',
+            't3': 'vehicle.volkswagen.t3',
+        }
+        
+        blueprint_path = vehicle_blueprints.get(vehicle_type.lower(), f'vehicle.tesla.{vehicle_type}')
+        
+        # 修复6: 使用车道内生成点
+        valid_points = self.get_valid_vehicle_spawn_points(safe_mode=True)
+        actual_count = min(count, len(valid_points))
+        if count > len(valid_points):
+            app_logger.warning(f"⚠️ 请求{count}辆，可用车道生成点{len(valid_points)}个，将生成{actual_count}辆")
+        
+        blueprint_library = self.world.get_blueprint_library()
+        spawned_vehicles = []
+        
+        for i in range(actual_count):
+            try:
+                blueprint = blueprint_library.find(blueprint_path)
+                if blueprint is None:
+                    blueprints = [bp for bp in blueprint_library.filter('vehicle.*') if bp.id.startswith('vehicle.')]
+                    blueprint = blueprints[i % len(blueprints)] if blueprints else None
+                
+                if blueprint is None:
                     continue
+                
+                if blueprint.has_attribute('color'):
+                    r, g, b = random.randint(0,255), random.randint(0,255), random.randint(0,255)
+                    blueprint.set_attribute('color', f"{r},{g},{b}")
+                
+                if blueprint.has_attribute('role_name'):
+                    blueprint.set_attribute('role_name', 'autopilot')
+                
+                # 修复6: 使用车道中心生成点
+                transform = valid_points[i]
+                vehicle = self.world.try_spawn_actor(blueprint, transform)
+                
+                if vehicle:
+                    if autopilot:
+                        vehicle.set_autopilot(True)
+                    self.actors.append(vehicle)
+                    spawned_vehicles.append(vehicle)
+                    app_logger.info(f"🚗 [第{i+1}辆] ID={vehicle.id} | {blueprint.id} | 位置=({transform.location.x:.1f}, {transform.location.y:.1f})")
+                else:
+                    app_logger.warning(f"⚠️ 第{i+1}辆生成失败，位置被占用")
+                    
+            except Exception as e:
+                app_logger.error(f"❌ 第{i+1}辆出错: {e}")
+                continue
+        
+        app_logger.info(f"✅ 共生成 {len(spawned_vehicles)} 辆车，ID列表: {[v.id for v in spawned_vehicles]}")
+        return spawned_vehicles
             
-            app_logger.info(f"✅ 共生成{len(spawned_vehicles)}辆车")
-            return spawned_vehicles
-            
-        except Exception as e:
-            app_logger.error(f"❌ 生成车辆失败: {str(e)}")
-            return []
+
 
     async def spawn_vehicle(self, vehicle_type='model3'):
         """生成单辆车辆（兼容旧接口）"""
@@ -720,6 +616,71 @@ class CarlaClient:
         except Exception as e:
             app_logger.error(f"❌ 设置行人移动失败: {str(e)}")
             return False
+
+     # ============ 修复6: 获取车道内有效生成点 ============
+    def get_valid_vehicle_spawn_points(self, safe_mode=True):
+        """获取有效的车辆生成点（仅在Driving车道内）"""
+        carla_map = self.world.get_map()
+        all_spawn_points = carla_map.get_spawn_points()
+        valid_points = []
+        for sp in all_spawn_points:
+            waypoint = carla_map.get_waypoint(sp.location, project_to_road=True, lane_type=carla.LaneType.Driving)
+            if waypoint is None or waypoint.lane_type != carla.LaneType.Driving:
+                continue
+            if safe_mode:
+                nearby = [a for a in self.world.get_actors().filter("vehicle.*")
+                          if a.get_location().distance(sp.location) < 5.0]
+                if nearby:
+                    continue
+            valid_points.append(waypoint.transform)
+        return valid_points
+
+     # ============ 修复7: 批量生成车辆并返回详细ID ============
+    async def batch_spawn_vehicles_with_id(self, count=10, blueprint_filter="vehicle.*", autopilot=True):
+        """批量生成车辆，返回带ID的详细列表"""
+        result = {"total": count, "success": 0, "failed": 0, "vehicles": []}
+        blueprints = [bp for bp in self.world.get_blueprint_library().filter(blueprint_filter)
+                      if bp.id.startswith("vehicle.")]
+        valid_points = self.get_valid_vehicle_spawn_points(safe_mode=True)
+        
+        for i in range(min(count, len(valid_points))):
+            blueprint = random.choice(blueprints)
+            color = "default"
+            if blueprint.has_attribute("color"):
+                color = f"{random.randint(0,255)},{random.randint(0,255)},{random.randint(0,255)}"
+                blueprint.set_attribute("color", color)
+            transform = valid_points[i]
+            try:
+                vehicle = self.world.try_spawn_actor(blueprint, transform)
+                if vehicle:
+                    if autopilot:
+                        vehicle.set_autopilot(True)
+                    self.actors.append(vehicle)
+                    info = {
+                        "index": i + 1,
+                        "id": vehicle.id,
+                        "type_id": vehicle.type_id,
+                        "blueprint": blueprint.id,
+                        "color": color,
+                        "location": {
+                            "x": round(transform.location.x, 2),
+                            "y": round(transform.location.y, 2),
+                            "z": round(transform.location.z, 2)
+                        },
+                        "autopilot": autopilot
+                    }
+                    result["vehicles"].append(info)
+                    result["success"] += 1
+            except Exception as e:
+                result["failed"] += 1
+        
+        app_logger.info("=" * 50)
+        app_logger.info(f"[修复7] 批量生成: 成功={result['success']}, 失败={result['failed']}")
+        for v in result["vehicles"]:
+            app_logger.info(f"  [{v['index']}] ID={v['id']:>4} | {v['type_id']:<35} | ({v['location']['x']}, {v['location']['y']})")
+        app_logger.info("=" * 50)
+        return result
+
 
     async def cleanup(self):
         """清理环境"""

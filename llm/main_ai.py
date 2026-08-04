@@ -92,7 +92,7 @@ class CarlaClient:
             app_logger.error(f"❌ 加载地图失败: {str(e)}")
             return False
 
-    async def set_synchronous_mode(self, enabled=True, fixed_delta_seconds=0.05):
+    async def set_synchronous_mode(self, enabled=True, fixed_delta_seconds=0.02):
         """设置同步模式 - 参考tuto_G_pedestrian_navigation.py"""
         try:
             if self.world is None:
@@ -117,7 +117,7 @@ class CarlaClient:
             return False
 
     async def start_tick_loop(self):
-        """启动后台tick循环，确保世界持续运行"""
+        """启动后台tick循环，确保世界持续运行，并同步更新视角"""
         import asyncio
         if self.is_ticking:
             app_logger.info("⚠️ tick循环已在运行")
@@ -133,8 +133,18 @@ class CarlaClient:
             while self.is_ticking and self.world:
                 try:
                     self.world.tick()
-                    self.check_and_fix_stuck_walkers()  # 修复3: 检测行人卡住
-                    await asyncio.sleep(0.05)  # 20 FPS
+                    self.check_and_fix_stuck_walkers()
+                    
+                    # 🔑 关键修复：在每次tick后立即更新视角跟随
+                    if self.is_view_following and self.view_target and self.view_target.is_alive:
+                        if self.current_view_mode == "third_person":
+                            self._update_third_person_view(self.view_target)
+                        elif self.current_view_mode == "first_person":
+                            self._update_first_person_view(self.view_target)
+                        elif self.current_view_mode == "overhead":
+                            self._update_overhead_view(self.view_target)
+                    
+                    await asyncio.sleep(0.05)
                 except Exception as e:
                     app_logger.warning(f"⚠️ tick时出错: {e}")
                     await asyncio.sleep(0.1)
@@ -181,16 +191,20 @@ class CarlaClient:
         
         blueprint_path = vehicle_blueprints.get(vehicle_type.lower(), f'vehicle.tesla.{vehicle_type}')
         
-        # 修复6: 使用车道内生成点
+        # 获取有效生成点
         valid_points = self.get_valid_vehicle_spawn_points(safe_mode=True)
-        actual_count = min(count, len(valid_points))
-        if count > len(valid_points):
-            app_logger.warning(f"⚠️ 请求{count}辆，可用车道生成点{len(valid_points)}个，将生成{actual_count}辆")
+        if not valid_points:
+            app_logger.warning("⚠️ 没有可用的车辆生成点")
+            return []
         
         blueprint_library = self.world.get_blueprint_library()
         spawned_vehicles = []
         
-        for i in range(actual_count):
+        # 遍历所有可用点，直到生成够 count 辆
+        for i, transform in enumerate(valid_points):
+            if len(spawned_vehicles) >= count:
+                break
+            
             try:
                 blueprint = blueprint_library.find(blueprint_path)
                 if blueprint is None:
@@ -207,10 +221,9 @@ class CarlaClient:
                 if blueprint.has_attribute('role_name'):
                     blueprint.set_attribute('role_name', 'autopilot')
                 
-                # 修复6: 使用车道中心生成点，加小偏移避免被占用
-                transform = valid_points[i]
-                offset_x = random.uniform(-1.0, 1.0)
-                offset_y = random.uniform(-1.0, 1.0)
+                # 小偏移避免位置被占（±0.5米，自动驾驶启动后会自动修正到车道中心）
+                offset_x = random.uniform(-0.5, 0.5)
+                offset_y = random.uniform(-0.5, 0.5)
                 new_loc = carla.Location(
                     x=transform.location.x + offset_x,
                     y=transform.location.y + offset_y,
@@ -224,13 +237,18 @@ class CarlaClient:
                         vehicle.set_autopilot(True)
                     self.actors.append(vehicle)
                     spawned_vehicles.append(vehicle)
-                    app_logger.info(f"🚗 [第{i+1}辆] ID={vehicle.id} | {blueprint.id} | 位置=({transform.location.x:.1f}, {transform.location.y:.1f})")
+                    app_logger.info(f"🚗 [第{len(spawned_vehicles)}辆] ID={vehicle.id} | {blueprint.id} | 位置=({transform.location.x:.1f}, {transform.location.y:.1f})")
                 else:
-                    app_logger.warning(f"⚠️ 第{i+1}辆生成失败，位置被占用")
+                    app_logger.warning(f"⚠️ 位置 ({transform.location.x:.1f}, {transform.location.y:.1f}) 被占用，尝试下一个点")
                     
             except Exception as e:
-                app_logger.error(f"❌ 第{i+1}辆出错: {e}")
+                app_logger.error(f"❌ 生成出错: {e}")
                 continue
+        
+        # 启动后台tick循环（视角跟随和自动驾驶都依赖它）
+        if spawned_vehicles and not self.is_ticking:
+            await self.start_tick_loop()
+            app_logger.info("🔄 已启动后台tick循环")
         
         app_logger.info(f"✅ 共生成 {len(spawned_vehicles)} 辆车，ID列表: {[v.id for v in spawned_vehicles]}")
         return spawned_vehicles
@@ -553,35 +571,22 @@ class CarlaClient:
             return False
 
     async def setup_autopilot(self, enable=True, radius=0.0):
-        """设置车辆自动驾驶模式
-        
-        Args:
-            enable: 是否启用自动驾驶
-            radius: 自动驾驶范围半径（米），0表示全图
-        """
-        # 检查是否已连接到CARLA服务器
+        """设置车辆自动驾驶模式"""
         if self.world is None:
-            app_logger.error("❌ 未连接到CARLA服务器，请先调用connect_carla")
+            app_logger.error("❌ 未连接到CARLA服务器")
             return False
         
         try:
-            # 获取所有车辆
             vehicles = [actor for actor in self.world.get_actors() if 'vehicle' in actor.type_id]
             
             enabled_count = 0
             for vehicle in vehicles:
-                # 检查车辆是否在指定范围内
                 if radius > 0:
-                    # 以当前 spectator 位置为中心
                     spectator = self.world.get_spectator()
-                    spectator_location = spectator.get_location()
-                    vehicle_location = vehicle.get_location()
-                    distance = spectator_location.distance(vehicle_location)
-                    
-                    if distance > radius:
+                    if spectator.get_location().distance(vehicle.get_location()) > radius:
                         continue
                 
-                # 启用或禁用自动驾驶
+                # 直接启用自动驾驶，CARLA 会自动走默认 Traffic Manager
                 vehicle.set_autopilot(enable)
                 enabled_count += 1
                 app_logger.info(f"🚗 车辆 {vehicle.id} 自动驾驶已{'启用' if enable else '禁用'}")
@@ -1156,46 +1161,18 @@ class CarlaClient:
             app_logger.error(f"❌ 设置旁观者视角失败: {str(e)}")
             return False
 
-    async def start_view_follow(self, view_mode, target_actor):
-        """启动视角跟随任务
-
+    def start_view_follow(self, view_mode, target_actor):
+        """启用视角跟随（实际更新逻辑已合并到tick_loop中）
+        
         Args:
-            view_mode: 视角模式 - third_person, first_person
+            view_mode: 视角模式 - third_person, first_person, overhead
             target_actor: 要跟随的目标actor
         """
-        import asyncio
-
-        # 停止之前的跟随
-        self.stop_view_follow()
-
         self.is_view_following = True
         self.view_target = target_actor
         self.current_view_mode = view_mode
 
-        app_logger.info(f"🎯 启动视角跟随 - 模式: {view_mode}, 目标: {target_actor.id}")
-
-        while self.is_view_following and self.world:
-            try:
-                # 检查目标是否还存在
-                if not target_actor.is_alive:
-                    app_logger.warning(f"⚠️ 视角目标 {target_actor.id} 已不存在，停止跟随")
-                    break
-
-                      # 根据视角模式更新视角
-                if view_mode == "third_person":
-                    self._update_third_person_view(target_actor)
-                elif view_mode == "first_person":
-                    self._update_first_person_view(target_actor)
-                elif view_mode == "overhead":      # 修复4: 新增 overhead 跟随
-                    self._update_overhead_view(target_actor)
-
-
-                # 每50ms更新一次（约20fps）
-                await asyncio.sleep(0.05)
-
-            except Exception as e:
-                app_logger.warning(f"⚠️ 视角跟随出错: {e}")
-                await asyncio.sleep(0.1)
+        app_logger.info(f"🎯 视角跟随已启用 - 模式: {view_mode}, 目标: {target_actor.id}")
 
     async def stop_view_follow(self):
         """停止视角跟随"""
@@ -1203,13 +1180,11 @@ class CarlaClient:
             self.is_view_following = False
             app_logger.info("🛑 停止视角跟随")
 
-        # 取消之前的跟随任务
         if self.view_follow_task and not self.view_follow_task.done():
+            self.view_follow_task.cancel()
             try:
-                self.view_follow_task.cancel()
-                # 等待任务真正结束
-                await asyncio.sleep(0.1)
-            except Exception:
+                await self.view_follow_task
+            except asyncio.CancelledError:
                 pass
             self.view_follow_task = None
 
@@ -1603,10 +1578,8 @@ class CarlaClient:
                 # 先设置一次视角
                 self.set_third_person_view(target_actor)
                 self.current_view_mode = "third_person"
-                # 启动视角跟随任务
-                self.view_follow_task = asyncio.create_task(
-                    self.start_view_follow("third_person", target_actor)
-                )
+                # 启动视角跟随（普通方法，直接调用）
+                self.start_view_follow("third_person", target_actor)
                 result = f"✅ 已切换到第三人称视角 - 目标: {target_actor.id} (已启用跟随)"
             else:
                 result = "❌ 第三人称视角需要指定目标"
@@ -1618,10 +1591,8 @@ class CarlaClient:
                 # 先设置一次视角
                 self.set_first_person_view(target_actor)
                 self.current_view_mode = "first_person"
-                # 启动视角跟随任务
-                self.view_follow_task = asyncio.create_task(
-                    self.start_view_follow("first_person", target_actor)
-                )
+                # 启动视角跟随（普通方法，直接调用）
+                self.start_view_follow("first_person", target_actor)
                 result = f"✅ 已切换到第一人称视角 - 目标: {target_actor.id} (已启用跟随)"
             else:
                 result = "❌ 第一人称视角需要指定目标"
@@ -1632,11 +1603,9 @@ class CarlaClient:
             await self.stop_view_follow()
             self.set_overhead_view(target_actor)
             self.current_view_mode = "overhead"
-            # 修复4: 如果有目标，启动跟随
+            # 如果有目标，启动跟随
             if target_actor:
-                self.view_follow_task = asyncio.create_task(
-                    self.start_view_follow("overhead", target_actor)
-                )
+                self.start_view_follow("overhead", target_actor)
                 result = f"✅ 已切换到俯视视角 - 目标: {target_actor.id} (已启用跟随)"
             else:
                 result = "✅ 已切换到俯视视角"
@@ -2628,9 +2597,9 @@ class FastMCPGitHubAssistant:
 
         # 检测是否指定了特定的视角模式
         view_mode = None
-        if '第一人称' in message or 'first_person' in message:
+        if '第一人称' in message or '第一视角' in message or 'first_person' in message:
             view_mode = 'first_person'
-        elif '第三人称' in message or 'third_person' in message:
+        elif '第三人称' in message or '第三视角' in message or 'third_person' in message:
             view_mode = 'third_person'
         elif '俯视' in message or '鸟瞰' in message or 'overhead' in message:
             view_mode = 'overhead'
@@ -2639,9 +2608,7 @@ class FastMCPGitHubAssistant:
         elif '旁观者' in message or 'bystander' in message:
             view_mode = 'bystander'
         else:
-            # 默认第三人称
             view_mode = 'third_person'
-
         # 旁观者视角不需要选择目标
         if view_mode == 'bystander':
             return {'needs_target_selection': False, 'view_mode': 'bystander'}

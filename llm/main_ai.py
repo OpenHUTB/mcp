@@ -1555,8 +1555,8 @@ async def spawn_vehicle_impl(query: str, count: int = 1, **kwargs) -> str:
         if len(vehicles) == 1:
             return f"✅ 已生成1辆{query}车辆 (ID: {vehicles[0].id})"
         else:
-            last_vehicle = vehicles[-1]
-            return f"✅ 已生成{len(vehicles)}辆{query}车辆，最后一辆车ID: {last_vehicle.id}"
+            ids = [v.id for v in vehicles]
+            return f"✅ 已生成{len(vehicles)}辆{query}车辆，ID列表: {ids}"
     return "❌ 车辆生成失败，请确保CARLA服务器已连接且地图有可用生成点"
 
 

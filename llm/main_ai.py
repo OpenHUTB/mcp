@@ -1597,6 +1597,7 @@ class CarlaClient:
             else:
                 result = "❌ 第一人称视角需要指定目标"
 
+        
         elif view_mode == "overhead":
             # 停止之前的跟随
             await self.stop_view_follow()

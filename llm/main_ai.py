@@ -556,6 +556,45 @@ class CarlaClient:
                 except Exception as e:
                     app_logger.warning(f"⚠️ 位置{idx+1} ({spawn_loc.x:.1f}, {spawn_loc.y:.1f}) 失败: {e}")
                     continue
+                
+                if blueprint.has_attribute('color'):
+                    r, g, b = random.randint(0,255), random.randint(0,255), random.randint(0,255)
+                    blueprint.set_attribute('color', f"{r},{g},{b}")
+                
+                if blueprint.has_attribute('role_name'):
+                    blueprint.set_attribute('role_name', 'autopilot')
+                
+                # 小偏移避免位置被占（±0.5米，自动驾驶启动后会自动修正到车道中心）
+                offset_x = random.uniform(-0.5, 0.5)
+                offset_y = random.uniform(-0.5, 0.5)
+                new_loc = carla.Location(
+                    x=transform.location.x + offset_x,
+                    y=transform.location.y + offset_y,
+                    z=transform.location.z + 0.5
+                )
+                new_transform = carla.Transform(new_loc, transform.rotation)
+                vehicle = self.world.try_spawn_actor(blueprint, new_transform)
+                
+                if vehicle:
+                    if autopilot:
+                        vehicle.set_autopilot(True)
+                    self.actors.append(vehicle)
+                    spawned_vehicles.append(vehicle)
+                    app_logger.info(f"🚗 [第{len(spawned_vehicles)}辆] ID={vehicle.id} | {blueprint.id} | 位置=({transform.location.x:.1f}, {transform.location.y:.1f})")
+                else:
+                    app_logger.warning(f"⚠️ 位置 ({transform.location.x:.1f}, {transform.location.y:.1f}) 被占用，尝试下一个点")
+                    
+            except Exception as e:
+                app_logger.error(f"❌ 生成出错: {e}")
+                continue
+        
+        # 启动后台tick循环（视角跟随和自动驾驶都依赖它）
+        if spawned_vehicles and not self.is_ticking:
+            await self.start_tick_loop()
+            app_logger.info("🔄 已启动后台tick循环")
+        
+        app_logger.info(f"✅ 共生成 {len(spawned_vehicles)} 辆车，ID列表: {[v.id for v in spawned_vehicles]}")
+        return spawned_vehicles
             
             app_logger.error(f"❌ 仰翻车辆生成彻底失败，已尝试{len(spawn_locations)}个位置")
             return None
@@ -1913,6 +1952,7 @@ class CarlaClient:
             else:
                 result = "❌ 第一人称视角需要指定目标"
 
+        
         elif view_mode == "overhead":
             # 停止之前的跟随
             await self.stop_view_follow()

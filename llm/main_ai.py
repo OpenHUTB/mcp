@@ -19,8 +19,6 @@ import carla
 import subprocess
 import os
 import xml.etree.ElementTree as ET
-import random
-import math
 from pathlib import Path
 from fastapi.responses import FileResponse
 # 添加src目录到Python路径
@@ -792,7 +790,7 @@ class CarlaClient:
                                         controller.set_max_speed(speed)
                                         app_logger.info(f"🎯 为行人设置随机目标位置，速度: {speed} m/s")
                                         
-                                        # 修复3+8: 保存控制器引用
+                                        # 修复3+8: 保存控制器引用，用于后续检测和恢复
                                         self.walker_controllers[pedestrian.id] = controller
                                         self.walker_goals[pedestrian.id] = {
                                             'last_location': pedestrian.get_location(),
@@ -1259,6 +1257,7 @@ class CarlaClient:
                         info['last_location'] = current_loc
                         app_logger.info(f"[修复3] 行人 {walker_id} 原地踏步，已重新设置目标")
                     else:
+                        import random
                         fallback = carla.Location(
                             x=current_loc.x + random.uniform(-15, 15),
                             y=current_loc.y + random.uniform(-15, 15),
@@ -2008,8 +2007,8 @@ async def spawn_vehicle_impl(query: str, count: int = 1, **kwargs) -> str:
         if len(vehicles) == 1:
             return f"✅ 已生成1辆{query}车辆 (ID: {vehicles[0].id})"
         else:
-            last_vehicle = vehicles[-1]
-            return f"✅ 已生成{len(vehicles)}辆{query}车辆，最后一辆车ID: {last_vehicle.id}"
+            ids = [v.id for v in vehicles]
+            return f"✅ 已生成{len(vehicles)}辆{query}车辆，ID列表: {ids}"
     return "❌ 车辆生成失败，请确保CARLA服务器已连接且地图有可用生成点"
 
 async def spawn_bicycle_impl(query: str, count: int = 1, **kwargs) -> str:
@@ -2707,41 +2706,6 @@ class FastMCPGitHubAssistant:
                             "scenario_name": {"type": "string", "description": "场景名称，默认my_scenario"},
                             "duration": {"type": "number", "description": "仿真时长（秒），默认30"},
                             "vehicle_speed": {"type": "number", "description": "车辆速度（m/s），默认10"}
-                        },
-                        "required": []
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "control_walker",
-                    "description": "控制行人停止或恢复移动。支持 stop(停止指定行人)、resume(恢复指定行人)、stop_all(停止所有行人)、resume_all(恢复所有行人)",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "action": {"type": "string", "enum": ["stop", "resume", "stop_all", "resume_all"], "description": "操作类型"},
-                            "walker_id": {"type": "integer", "description": "行人ID，stop/resume时需要"}
-                        },
-                        "required": ["action"]
-                    }
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "spawn_vehicle_param",
-                    "description": "参数化生成车辆，支持参照物/距离/角度/速度控制。当用户要求精确控制生成位置时使用。",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "count": {"type": "integer", "description": "生成数量", "default": 1},
-                            "blueprint_filter": {"type": "string", "description": "蓝图过滤，如 vehicle.tesla.model3", "default": "vehicle.*"},
-                            "autopilot": {"type": "boolean", "description": "是否开启自动驾驶", "default": True},
-                            "reference_id": {"type": "integer", "description": "参照物actor ID，None则使用地图spawn point", "default": None},
-                            "relative_distance": {"type": "number", "description": "相对参照物的距离（米）", "default": 10.0},
-                            "relative_angle": {"type": "number", "description": "相对参照物的角度（度，0=正前方）", "default": 0.0},
-                            "initial_speed": {"type": "number", "description": "初始速度（m/s）", "default": 0.0}
                         },
                         "required": []
                     }
@@ -4654,155 +4618,6 @@ async def generate_openscenario(
 ) -> str:
     """生成 OpenSCENARIO 场景文件。"""
     return await generate_openscenario_impl(xodr_filename, scenario_name, duration, vehicle_speed)
-
-# ============ 修复5: SpawnParameters 参数面板类 ============
-class SpawnParameters:
-    """生成参数面板"""
-    def __init__(self):
-        self.actor_type = "vehicle"
-        self.blueprint_filter = "vehicle.*"
-        self.reference_actor_id = None
-        self.relative_distance = 10.0
-        self.relative_angle = 0.0
-        self.lane_type = "Driving"
-        self.initial_speed = 0.0
-        self.autopilot = False
-        self.count = 1
-
-# ============ 修复8: MCP Tool - 控制行人停止/恢复 ============
-@mcp.tool()
-async def control_walker(action: str, walker_id: int = None) -> str:
-    """控制行人停止或恢复移动
-    
-    Args:
-        action: "stop" | "resume" | "stop_all" | "resume_all"
-        walker_id: 行人ID（stop/resume需要）
-    """
-    if carla_client.world is None:
-        return "❌ 未连接到CARLA服务器"
-    
-    if action == "stop":
-        if walker_id is None:
-            return "❌ stop需要指定walker_id"
-        carla_client.stop_walker(walker_id)
-        return f"✅ 行人 {walker_id} 已停止"
-    elif action == "resume":
-        if walker_id is None:
-            return "❌ resume需要指定walker_id"
-        if carla_client.resume_walker(walker_id):
-            return f"✅ 行人 {walker_id} 已恢复移动"
-        return f"❌ 行人 {walker_id} 恢复失败"
-    elif action == "stop_all":
-        count = carla_client.stop_all_walkers()
-        return f"✅ 已停止 {count} 个行人"
-    elif action == "resume_all":
-        count = carla_client.resume_all_walkers()
-        return f"✅ 已恢复 {count} 个行人"
-    return f"❌ 未知操作: {action}"
-
-# ============ 修复5+6+7: 底层实现函数 ============
-async def spawn_vehicle_param_impl(
-    count: int = 1,
-    blueprint_filter: str = "vehicle.*",
-    autopilot: bool = True,
-    reference_id: int = None,
-    relative_distance: float = 10.0,
-    relative_angle: float = 0.0,
-    initial_speed: float = 0.0
-) -> str:
-    """参数化生成车辆的底层实现"""
-    try:
-        if carla_client.world is None:
-            return "❌ 未连接到CARLA服务器"
-        
-        params = SpawnParameters()
-        params.actor_type = "vehicle"
-        params.blueprint_filter = blueprint_filter
-        params.reference_actor_id = reference_id
-        params.relative_distance = relative_distance
-        params.relative_angle = relative_angle
-        params.autopilot = autopilot
-        params.initial_speed = initial_speed
-        params.count = count
-        params.lane_type = "Driving"
-        
-        if reference_id is None:
-            result = await carla_client.batch_spawn_vehicles_with_id(count, blueprint_filter, autopilot)
-            lines = [f"✅ 生成完成：成功{result['success']}辆，失败{result['failed']}辆"]
-            for v in result["vehicles"]:
-                lines.append(f"  [{v['index']}] ID={v['id']} {v['type_id']} @({v['location']['x']},{v['location']['y']})")
-            return "\n".join(lines)
-        else:
-            spawned = await carla_client.spawn_vehicles_with_params(params)
-            return f"✅ 生成完成：成功{len(spawned)}辆，ID={[a.id for a in spawned]}"
-    except Exception as e:
-        app_logger.error(f"❌ spawn_vehicle_param_impl 异常: {e}")
-        return f"❌ 生成失败: {str(e)}"
-
-
-async def control_walker_impl(action: str, walker_id: int = None) -> str:
-    """控制行人停止/恢复的底层实现"""
-    if carla_client.world is None:
-        return "❌ 未连接到CARLA服务器"
-    
-    if action == "stop":
-        if walker_id is None:
-            return "❌ stop需要指定walker_id"
-        carla_client.stop_walker(walker_id)
-        return f"✅ 行人 {walker_id} 已停止"
-    elif action == "resume":
-        if walker_id is None:
-            return "❌ resume需要指定walker_id"
-        if carla_client.resume_walker(walker_id):
-            return f"✅ 行人 {walker_id} 已恢复移动"
-        return f"❌ 行人 {walker_id} 恢复失败"
-    elif action == "stop_all":
-        count = carla_client.stop_all_walkers()
-        return f"✅ 已停止 {count} 个行人"
-    elif action == "resume_all":
-        count = carla_client.resume_all_walkers()
-        return f"✅ 已恢复 {count} 个行人"
-    return f"❌ 未知操作: {action}"
-
-# ============ 修复5+6+7: MCP Tool - 参数化生成车辆 ============
-@mcp.tool()
-async def spawn_vehicle_param(
-    count: int = 1,
-    blueprint_filter: str = "vehicle.*",
-    autopilot: bool = True,
-    reference_id: int = None,
-    relative_distance: float = 10.0,
-    relative_angle: float = 0.0,
-    initial_speed: float = 0.0
-) -> str:
-    """参数化生成车辆，支持参照物/距离/角度/速度控制"""
-    try:
-        if carla_client.world is None:
-            return "❌ 未连接到CARLA服务器"
-        
-        params = SpawnParameters()
-        params.actor_type = "vehicle"
-        params.blueprint_filter = blueprint_filter
-        params.reference_actor_id = reference_id
-        params.relative_distance = relative_distance
-        params.relative_angle = relative_angle
-        params.autopilot = autopilot
-        params.initial_speed = initial_speed
-        params.count = count
-        params.lane_type = "Driving"
-        
-        if reference_id is None:
-            result = await carla_client.batch_spawn_vehicles_with_id(count, blueprint_filter, autopilot)
-            lines = [f"✅ 生成完成：成功{result['success']}辆，失败{result['failed']}辆"]
-            for v in result["vehicles"]:
-                lines.append(f"  [{v['index']}] ID={v['id']} {v['type_id']} @({v['location']['x']},{v['location']['y']})")
-            return "\n".join(lines)
-        else:
-            spawned = await carla_client.spawn_vehicles_with_params(params)
-            return f"✅ 生成完成：成功{len(spawned)}辆，ID={[a.id for a in spawned]}"
-    except Exception as e:
-        app_logger.error(f"❌ spawn_vehicle_param 异常: {e}")
-        return f"❌ 生成失败: {str(e)}"
 
 if __name__ == "__main__":
     main()

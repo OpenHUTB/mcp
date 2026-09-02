@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+    SUMO Activity-Based Mobility Generator
+
+    Author: Lara CODECA
+
+    This program and the accompanying materials are made available under the
+    terms of the Eclipse Public License 2.0 which is available at
+    http://www.eclipse.org/legal/epl-2.0.
+-->
+
+<sumoConfiguration xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/sumoConfiguration.xsd">
+
+    <input>
+        <net-file value="MoSTScenario/tools/out/most.net.xml"/>
+        <route-files value="most/rou/most.example.buses.flows.xml,most/rou/most.example.trains.flows.xml"/>
+        <additional-files value="MoSTScenario/tools/out/most.busstops.add.xml,MoSTScenario/tools/out/most.trainstops.add.xml,MoSTScenario/tools/out/most.parking.add.xml,MoSTScenario/tools/out/most.rerouters.add.xml,MoSTScenario/scenario/in/add/basic.vType.xml"/>
+    </input>
+
+    <time>
+        <begin value="0.0"/>
+        <step-length value="0.5"/>
+        <end value="86400.0"/>
+    </time>
+
+    <processing>
+        <collision.action value="teleport"/>
+        <ignore-junction-blocker value="60"/>
+        <ignore-route-errors value="true"/>
+        <lateral-resolution value="0.8"/>
+        <max-depart-delay value="900"/>
+        <time-to-impatience value="120"/>
+        <time-to-teleport value="300"/>
+
+        <parking.maneuver value="true"/>
+
+        <pedestrian.model value="striping"/>
+        <pedestrian.striping.dawdling value="0.2"/>
+        <pedestrian.striping.jamtime value="60"/>
+        <pedestrian.striping.jamtime.crossing value="10"/>
+        <pedestrian.striping.reserve-oncoming value="0.25"/>
+        <pedestrian.striping.reserve-oncoming.junctions value="0.34"/>
+        <pedestrian.striping.stripe-width value="0.55"/>
+
+        <ride.stop-tolerance value="25"/>
+    </processing>
+
+    <routing>
+        <device.rerouting.probability value="1"/>
+        <device.rerouting.period value="300"/>
+        <device.rerouting.pre-period value="300"/>
+        <device.rerouting.bike-speeds value="true"/>
+
+        <person-device.rerouting.probability value="1"/>
+        <person-device.rerouting.period value="300"/>
+
+        <persontrip.walkfactor value="0.75"/>
+        <persontrip.taxi.waiting-time value="300"/>
+        <persontrip.transfer.car-walk value="parkingAreas,ptStops,allJunctions"/>
+        <persontrip.transfer.taxi-walk value="parkingAreas,ptStops,allJunctions"/>
+        <persontrip.transfer.walk-taxi value="parkingAreas,ptStops,allJunctions"/>
+    </routing>
+
+    <taxi_device>
+        <device.taxi.dispatch-algorithm value="greedy"/>
+        <device.taxi.dispatch-period value="60"/>
+        <device.taxi.idle-algorithm value="randomCircling"/>
+    </taxi_device>
+
+    <report>
+        <verbose value="false"/>
+        <no-step-log value="true"/>
+        <duration-log.statistics value="false"/>
+        <duration-log.disable value="true"/>
+        <no-warnings value="true"/>
+    </report>
+
+    <random_number>
+        <seed value="42"/>
+    </random_number>
+
+</sumoConfiguration>

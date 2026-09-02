@@ -167,6 +167,7 @@ class CarlaClient:
 
     async def spawn_vehicles(self, vehicle_type='model3', count=1, autopilot=False):
         """生成多辆车辆，确保在车道内，返回详细ID列表"""
+        count = int(count)  # ← 新增：强制转int，防止LLM传字符串
         if self.world is None:
             app_logger.error("❌ 未连接到CARLA服务器")
             return []
@@ -250,8 +251,357 @@ class CarlaClient:
         
         app_logger.info(f"✅ 共生成 {len(spawned_vehicles)} 辆车，ID列表: {[v.id for v in spawned_vehicles]}")
         return spawned_vehicles
-            
 
+    async def spawn_bicycles(self, bicycle_type='crossbike', count=1):
+        count = int(count)  # ← 新增
+        """生成多辆自行车，返回详细ID列表
+        
+        支持的自行车类型:
+        - crossbike: BH Crossbike
+        - century: Diamondback Century
+        - omafiets: Gazelle Omafiets
+        """
+        if self.world is None:
+            app_logger.error("❌ 未连接到CARLA服务器")
+            return []
+        
+        bicycle_blueprints = {
+            'crossbike': 'vehicle.bh.crossbike',
+            'century': 'vehicle.diamondback.century',
+            'omafiets': 'vehicle.gazelle.omafiets',
+        }
+        
+        blueprint_path = bicycle_blueprints.get(bicycle_type.lower(), f'vehicle.bh.{bicycle_type}')
+        
+        valid_points = self.get_valid_vehicle_spawn_points(safe_mode=True)
+        if not valid_points:
+            app_logger.warning("⚠️ 没有可用的自行车生成点")
+            return []
+        
+        blueprint_library = self.world.get_blueprint_library()
+        spawned_bicycles = []
+        
+        for i, transform in enumerate(valid_points):
+            if len(spawned_bicycles) >= count:
+                break
+            
+            try:
+                blueprint = blueprint_library.find(blueprint_path)
+                if blueprint is None:
+                    # 回退到任意自行车蓝图
+                    blueprints = [bp for bp in blueprint_library.filter('vehicle.*') 
+                                  if 'crossbike' in bp.id or 'diamondback' in bp.id or 'gazelle' in bp.id or 'bike' in bp.id]
+                    blueprint = blueprints[i % len(blueprints)] if blueprints else None
+                
+                if blueprint is None:
+                    continue
+                
+                # 自行车通常没有颜色属性，跳过颜色设置
+                # 小偏移避免位置被占
+                offset_x = random.uniform(-0.5, 0.5)
+                offset_y = random.uniform(-0.5, 0.5)
+                new_loc = carla.Location(
+                    x=transform.location.x + offset_x,
+                    y=transform.location.y + offset_y,
+                    z=transform.location.z + 0.5
+                )
+                new_transform = carla.Transform(new_loc, transform.rotation)
+                bicycle = self.world.try_spawn_actor(blueprint, new_transform)
+                
+                if bicycle:
+                    self.actors.append(bicycle)
+                    spawned_bicycles.append(bicycle)
+                    app_logger.info(f"🚲 [第{len(spawned_bicycles)}辆] ID={bicycle.id} | {blueprint.id} | 位置=({transform.location.x:.1f}, {transform.location.y:.1f})")
+                else:
+                    app_logger.warning(f"⚠️ 位置 ({transform.location.x:.1f}, {transform.location.y:.1f}) 被占用，尝试下一个点")
+                    
+            except Exception as e:
+                app_logger.error(f"❌ 生成自行车出错: {e}")
+                continue
+        
+        # 启动后台tick循环
+        if spawned_bicycles and not self.is_ticking:
+            await self.start_tick_loop()
+            app_logger.info("🔄 已启动后台tick循环")
+        
+        app_logger.info(f"✅ 共生成 {len(spawned_bicycles)} 辆自行车，ID列表: {[b.id for b in spawned_bicycles]}")
+        return spawned_bicycles     
+
+    async def spawn_motorcycles(self, motorcycle_type='ninja', count=1):
+        count = int(count)  # ← 新增
+        """生成多辆摩托车，返回详细ID列表
+        
+        支持的摩托车类型:
+        - ninja: Kawasaki Ninja
+        - yzf: Yamaha YZF
+        - low_rider: Harley-Davidson Low Rider
+        """
+        if self.world is None:
+            app_logger.error("❌ 未连接到CARLA服务器")
+            return []
+        
+        motorcycle_blueprints = {
+            'ninja': 'vehicle.kawasaki.ninja',
+            'yzf': 'vehicle.yamaha.yzf',
+            'low_rider': 'vehicle.harley-davidson.low_rider',
+        }
+        
+        blueprint_path = motorcycle_blueprints.get(motorcycle_type.lower(), f'vehicle.kawasaki.{motorcycle_type}')
+        
+        valid_points = self.get_valid_vehicle_spawn_points(safe_mode=True)
+        if not valid_points:
+            app_logger.warning("⚠️ 没有可用的摩托车生成点")
+            return []
+        
+        blueprint_library = self.world.get_blueprint_library()
+        spawned_motorcycles = []
+        
+        for i, transform in enumerate(valid_points):
+            if len(spawned_motorcycles) >= count:
+                break
+            
+            try:
+                blueprint = blueprint_library.find(blueprint_path)
+                if blueprint is None:
+                    blueprints = [bp for bp in blueprint_library.filter('vehicle.*') 
+                                  if 'ninja' in bp.id or 'yzf' in bp.id or 'low_rider' in bp.id or 'harley' in bp.id]
+                    blueprint = blueprints[i % len(blueprints)] if blueprints else None
+                
+                if blueprint is None:
+                    continue
+                
+                offset_x = random.uniform(-0.5, 0.5)
+                offset_y = random.uniform(-0.5, 0.5)
+                new_loc = carla.Location(
+                    x=transform.location.x + offset_x,
+                    y=transform.location.y + offset_y,
+                    z=transform.location.z + 0.5
+                )
+                new_transform = carla.Transform(new_loc, transform.rotation)
+                motorcycle = self.world.try_spawn_actor(blueprint, new_transform)
+                
+                if motorcycle:
+                    self.actors.append(motorcycle)
+                    spawned_motorcycles.append(motorcycle)
+                    app_logger.info(f"🏍️ [第{len(spawned_motorcycles)}辆] ID={motorcycle.id} | {blueprint.id} | 位置=({transform.location.x:.1f}, {transform.location.y:.1f})")
+                else:
+                    app_logger.warning(f"⚠️ 位置 ({transform.location.x:.1f}, {transform.location.y:.1f}) 被占用，尝试下一个点")
+                    
+            except Exception as e:
+                app_logger.error(f"❌ 生成摩托车出错: {e}")
+                continue
+        
+        if spawned_motorcycles and not self.is_ticking:
+            await self.start_tick_loop()
+            app_logger.info("🔄 已启动后台tick循环")
+        
+        app_logger.info(f"✅ 共生成 {len(spawned_motorcycles)} 辆摩托车，ID列表: {[m.id for m in spawned_motorcycles]}")
+        return spawned_motorcycles
+
+    async def spawn_props(self, prop_type='cone', count=1, location=None):
+        count = int(count)  # ← 新增
+        """生成静态道具（施工警示牌、三角警示牌、路障等）
+        
+        支持的道具类型:
+        - cone: 施工锥/路锥
+        - barrier: 路障/护栏
+        - warning: 三角警示牌/交通警示牌
+        - construction: 施工警示牌（如果有）
+        """
+        if self.world is None:
+            app_logger.error("❌ 未连接到CARLA服务器")
+            return []
+        
+        prop_blueprints = {
+            'cone': 'static.prop.constructioncone',
+            'barrier': 'static.prop.barrier',
+            'warning': 'static.prop.trafficwarning',
+            'construction': 'static.prop.constructioncone',  # 回退到施工锥
+        }
+        
+        blueprint_path = prop_blueprints.get(prop_type.lower(), f'static.prop.{prop_type}')
+        blueprint_library = self.world.get_blueprint_library()
+        spawned_props = []
+        
+        for i in range(count):
+            try:
+                blueprint = blueprint_library.find(blueprint_path)
+                if blueprint is None:
+                    # 回退到任意静态道具
+                    blueprints = [bp for bp in blueprint_library.filter('static.prop.*') 
+                                  if 'cone' in bp.id or 'barrier' in bp.id or 'warning' in bp.id]
+                    blueprint = blueprints[i % len(blueprints)] if blueprints else None
+                
+                if blueprint is None:
+                    app_logger.warning(f"⚠️ 找不到道具蓝图: {blueprint_path}")
+                    continue
+                
+                # 如果指定了位置，使用指定位置；否则在车辆附近随机放置
+                if location:
+                    spawn_loc = carla.Location(
+                        x=location.x + random.uniform(-2.0, 2.0),
+                        y=location.y + random.uniform(-2.0, 2.0),
+                        z=location.z + 0.1
+                    )
+                else:
+                    # 默认在地图原点附近
+                    spawn_loc = carla.Location(
+                        x=random.uniform(-50, 50),
+                        y=random.uniform(-50, 50),
+                        z=0.1
+                    )
+                
+                spawn_transform = carla.Transform(spawn_loc, carla.Rotation())
+                prop = self.world.try_spawn_actor(blueprint, spawn_transform)
+                
+                if prop:
+                    self.actors.append(prop)
+                    spawned_props.append(prop)
+                    app_logger.info(f"🚧 [第{len(spawned_props)}个] ID={prop.id} | {blueprint.id} | 位置=({spawn_loc.x:.1f}, {spawn_loc.y:.1f})")
+                else:
+                    app_logger.warning(f"⚠️ 道具生成失败，位置可能被占用")
+                    
+            except Exception as e:
+                app_logger.error(f"❌ 生成道具出错: {e}")
+                continue
+        
+        app_logger.info(f"✅ 共生成 {len(spawned_props)} 个道具，ID列表: {[p.id for p in spawned_props]}")
+        return spawned_props
+
+    async def spawn_overturned_vehicle(self, vehicle_type='model3', location=None):
+        """生成仰翻的车辆（多重容错：遍历所有点 → 随机位置 → 手动空位）"""
+        if self.world is None:
+            app_logger.error("❌ 未连接到CARLA服务器")
+            return None
+        
+        try:
+            vehicle_type = str(vehicle_type).lower()
+            
+            vehicle_blueprints = {
+                'model3': 'vehicle.tesla.model3',
+                'mustang': 'vehicle.ford.mustang',
+                'a2': 'vehicle.audi.a2',
+                'charger_police': 'vehicle.dodge.charger_police',
+            }
+            
+            blueprint_path = vehicle_blueprints.get(vehicle_type, 'vehicle.tesla.model3')
+            blueprint_library = self.world.get_blueprint_library()
+            blueprint = blueprint_library.find(blueprint_path)
+            
+            if blueprint is None:
+                app_logger.error(f"❌ 找不到蓝图: {blueprint_path}")
+                return None
+            
+            # 收集所有可能的生成位置
+            spawn_locations = []
+            
+            # 1. 使用传入的位置
+            if location:
+                spawn_locations.append(location)
+            
+            # 2. 使用地图车辆生成点
+            map_spawn_points = self.world.get_map().get_spawn_points()
+            if map_spawn_points:
+                random.shuffle(map_spawn_points)
+                for sp in map_spawn_points[:20]:  # 取前20个随机点
+                    spawn_locations.append(sp.location)
+            
+            # 3. 使用导航随机位置
+            for _ in range(10):
+                nav_loc = self.world.get_random_location_from_navigation()
+                if nav_loc:
+                    spawn_locations.append(nav_loc)
+            
+            # 4. 手动指定几个空位（地图中心附近）
+            for offset in [(0,0), (10,0), (-10,0), (0,10), (0,-10), (20,20), (-20,-20)]:
+                spawn_locations.append(carla.Location(x=offset[0], y=offset[1], z=0.5))
+            
+            if not spawn_locations:
+                app_logger.error("❌ 没有任何可用生成位置")
+                return None
+            
+            # 目标翻转姿态
+            overturned_rotation = carla.Rotation(pitch=0, yaw=random.uniform(0, 360), roll=180)
+            
+            # 遍历所有位置尝试生成
+            for idx, spawn_loc in enumerate(spawn_locations):
+                try:
+                    # 确保z轴有足够高度
+                    spawn_loc.z = max(spawn_loc.z, 0.5)
+                    
+                    # 方案A：直接仰翻 spawn
+                    spawn_transform = carla.Transform(spawn_loc, overturned_rotation)
+                    vehicle = self.world.try_spawn_actor(blueprint, spawn_transform)
+                    
+                    if vehicle:
+                        vehicle.set_simulate_physics(False)
+                        self.actors.append(vehicle)
+                        app_logger.info(f"🚗💥 仰翻车辆生成成功: {vehicle_type} (ID: {vehicle.id}, 尝试{idx+1}次)")
+                        return vehicle
+                    
+                    # 方案B：正常 spawn 后翻转
+                    normal_transform = carla.Transform(spawn_loc, carla.Rotation())
+                    vehicle = self.world.try_spawn_actor(blueprint, normal_transform)
+                    
+                    if vehicle:
+                        vehicle.set_simulate_physics(False)
+                        final_loc = vehicle.get_location()
+                        vehicle.set_transform(carla.Transform(final_loc, overturned_rotation))
+                        self.actors.append(vehicle)
+                        app_logger.info(f"🚗💥 仰翻车辆生成成功(翻转): {vehicle_type} (ID: {vehicle.id}, 尝试{idx+1}次)")
+                        return vehicle
+                        
+                except Exception as e:
+                    app_logger.warning(f"⚠️ 位置{idx+1} ({spawn_loc.x:.1f}, {spawn_loc.y:.1f}) 失败: {e}")
+                    continue
+                
+                if blueprint.has_attribute('color'):
+                    r, g, b = random.randint(0,255), random.randint(0,255), random.randint(0,255)
+                    blueprint.set_attribute('color', f"{r},{g},{b}")
+                
+                if blueprint.has_attribute('role_name'):
+                    blueprint.set_attribute('role_name', 'autopilot')
+                
+                # 小偏移避免位置被占（±0.5米，自动驾驶启动后会自动修正到车道中心）
+                offset_x = random.uniform(-0.5, 0.5)
+                offset_y = random.uniform(-0.5, 0.5)
+                new_loc = carla.Location(
+                    x=transform.location.x + offset_x,
+                    y=transform.location.y + offset_y,
+                    z=transform.location.z + 0.5
+                )
+                new_transform = carla.Transform(new_loc, transform.rotation)
+                vehicle = self.world.try_spawn_actor(blueprint, new_transform)
+                
+                if vehicle:
+                    if autopilot:
+                        vehicle.set_autopilot(True)
+                    self.actors.append(vehicle)
+                    spawned_vehicles.append(vehicle)
+                    app_logger.info(f"🚗 [第{len(spawned_vehicles)}辆] ID={vehicle.id} | {blueprint.id} | 位置=({transform.location.x:.1f}, {transform.location.y:.1f})")
+                else:
+                    app_logger.warning(f"⚠️ 位置 ({transform.location.x:.1f}, {transform.location.y:.1f}) 被占用，尝试下一个点")
+                    
+            except Exception as e:
+                app_logger.error(f"❌ 生成出错: {e}")
+                continue
+        
+        # 启动后台tick循环（视角跟随和自动驾驶都依赖它）
+        if spawned_vehicles and not self.is_ticking:
+            await self.start_tick_loop()
+            app_logger.info("🔄 已启动后台tick循环")
+        
+        app_logger.info(f"✅ 共生成 {len(spawned_vehicles)} 辆车，ID列表: {[v.id for v in spawned_vehicles]}")
+        return spawned_vehicles
+            
+            app_logger.error(f"❌ 仰翻车辆生成彻底失败，已尝试{len(spawn_locations)}个位置")
+            return None
+            
+        except Exception as e:
+            app_logger.error(f"❌ 生成仰翻车辆异常: {e}")
+            import traceback
+            app_logger.error(traceback.format_exc())
+            return None
 
     async def spawn_vehicle(self, vehicle_type='model3'):
         """生成单辆车辆（兼容旧接口）"""
@@ -260,7 +610,6 @@ class CarlaClient:
 
     async def set_weather(self, weather_type='clear'):
         """设置天气"""
-        # 检查是否已连接到CARLA服务器
         if self.world is None:
             app_logger.error("❌ 未连接到CARLA服务器，请先调用connect_carla")
             return False
@@ -281,6 +630,11 @@ class CarlaClient:
                 wind_intensity=5, sun_azimuth_angle=0, sun_altitude_angle=30,
                 fog_density=90, fog_distance=50, wetness=20
             ),
+            'light_fog': carla.WeatherParameters(  # ← 新增：薄雾
+                cloudiness=60, precipitation=0, precipitation_deposits=0,
+                wind_intensity=5, sun_azimuth_angle=0, sun_altitude_angle=45,
+                fog_density=25, fog_distance=80, wetness=10, fog_falloff=2.0
+            ),
             'snow': carla.WeatherParameters(
                 cloudiness=80, precipitation=60, precipitation_deposits=80,
                 wind_intensity=20, sun_azimuth_angle=0, sun_altitude_angle=10,
@@ -294,6 +648,7 @@ class CarlaClient:
         }
         if weather_type in weather_presets:
             self.world.set_weather(weather_presets[weather_type])
+            app_logger.info(f"✅ 天气已设置为 {weather_type}")
             return True
         return False
 
@@ -1639,11 +1994,13 @@ async def connect_carla_impl(host: str = 'localhost', port: int = 2000) -> str:
 
 
 async def spawn_vehicle_impl(query: str, count: int = 1, **kwargs) -> str:
-    # 自动连接：如果 world 为 None，先尝试连接
     if carla_client.world is None:
         await carla_client.connect('localhost', 2000)
     if carla_client.world is None:
         return "❌ 未连接到CARLA服务器，请先使用'连接CARLA服务器'命令进行连接"
+    
+    # 强制转int，防止LLM传字符串进来
+    count = int(count)
     
     vehicles = await carla_client.spawn_vehicles(query, count=count)
     if vehicles:
@@ -1654,6 +2011,96 @@ async def spawn_vehicle_impl(query: str, count: int = 1, **kwargs) -> str:
             return f"✅ 已生成{len(vehicles)}辆{query}车辆，ID列表: {ids}"
     return "❌ 车辆生成失败，请确保CARLA服务器已连接且地图有可用生成点"
 
+async def spawn_bicycle_impl(query: str, count: int = 1, **kwargs) -> str:
+    if carla_client.world is None:
+        await carla_client.connect('localhost', 2000)
+    if carla_client.world is None:
+        return "❌ 未连接到CARLA服务器，请先使用'连接CARLA服务器'命令进行连接"
+    
+    count = int(count)  # ← 强制转int
+    
+    bicycles = await carla_client.spawn_bicycles(query, count=count)
+    if bicycles:
+        if len(bicycles) == 1:
+            return f"✅ 已生成1辆{query}自行车 (ID: {bicycles[0].id})"
+        else:
+            ids = [b.id for b in bicycles]
+            return f"✅ 已生成{len(bicycles)}辆{query}自行车，ID列表: {ids}"
+    return "❌ 自行车生成失败，请确保CARLA服务器已连接且地图有可用生成点"
+
+async def spawn_motorcycle_impl(query: str, count: int = 1, **kwargs) -> str:
+    if carla_client.world is None:
+        await carla_client.connect('localhost', 2000)
+    if carla_client.world is None:
+        return "❌ 未连接到CARLA服务器"
+    
+    count = int(count)  # ← 强制转int
+    
+    motorcycles = await carla_client.spawn_motorcycles(query, count=count)
+    if motorcycles:
+        if len(motorcycles) == 1:
+            return f"✅ 已生成1辆{query}摩托车 (ID: {motorcycles[0].id})"
+        else:
+            ids = [m.id for m in motorcycles]
+            return f"✅ 已生成{len(motorcycles)}辆{query}摩托车，ID列表: {ids}"
+    return "❌ 摩托车生成失败"
+
+async def spawn_prop_impl(query: str, count: int = 1, target_id: int = None, **kwargs) -> str:
+    """（实际功能：生成道具/警示牌，可指定放在某个actor后方）"""
+    if carla_client.world is None:
+        await carla_client.connect('localhost', 2000)
+    if carla_client.world is None:
+        return "❌ 未连接到CARLA服务器"
+    
+    count = int(count)
+    
+    # 如果指定了 target_id，计算目标后方位置
+    location = None
+    if target_id is not None:
+        target_actor = None
+        for actor in carla_client.world.get_actors():
+            if actor.id == int(target_id):
+                target_actor = actor
+                break
+        
+        if target_actor is None:
+            return f"❌ 找不到目标 actor (ID: {target_id})，无法放置道具"
+        
+        # 获取目标位置和朝向，计算后方5米处
+        target_loc = target_actor.get_location()
+        target_rot = target_actor.get_transform().rotation
+        
+        # 将 yaw 转换为弧度，计算后方偏移
+        import math
+        yaw_rad = math.radians(target_rot.yaw)
+        # 后方 = 当前位置 - 朝向向量 * 距离
+        behind_x = target_loc.x - math.cos(yaw_rad) * 5.0
+        behind_y = target_loc.y - math.sin(yaw_rad) * 5.0
+        behind_z = target_loc.z + 0.1
+        
+        location = carla.Location(x=behind_x, y=behind_y, z=behind_z)
+        app_logger.info(f"🚧 道具将放置在目标 {target_id} 后方5米处 ({behind_x:.1f}, {behind_y:.1f})")
+    
+    props = await carla_client.spawn_props(query, count=count, location=location)
+    if props:
+        if len(props) == 1:
+            return f"✅ 已生成1个{query}道具 (ID: {props[0].id})" + (f"，位于目标 {target_id} 后方" if target_id else "")
+        else:
+            ids = [p.id for p in props]
+            return f"✅ 已生成{len(props)}个{query}道具，ID列表: {ids}" + (f"，位于目标 {target_id} 后方" if target_id else "")
+    return "❌ 道具生成失败"
+
+async def spawn_overturned_vehicle_impl(vehicle_type: str = 'model3', **kwargs) -> str:
+    """（实际功能：生成仰翻车辆）"""
+    if carla_client.world is None:
+        await carla_client.connect('localhost', 2000)
+    if carla_client.world is None:
+        return "❌ 未连接到CARLA服务器"
+    
+    vehicle = await carla_client.spawn_overturned_vehicle(vehicle_type)
+    if vehicle:
+        return f"✅ 已生成仰翻的{vehicle_type} (ID: {vehicle.id})，物理已禁用以保持姿态"
+    return "❌ 仰翻车辆生成失败"
 
 async def set_weather_impl(weather_type: str) -> str:
     """（实际功能：设置天气）"""
@@ -1696,6 +2143,8 @@ async def spawn_pedestrian_impl(query: str, count: int = 1, speed: float = None,
     # 检查是否已连接到CARLA服务器
     if carla_client.world is None:
         return "❌ 未连接到CARLA服务器，请先使用'连接CARLA服务器'命令进行连接"
+
+    count = int(count)  # ← 强制转int
     
     pedestrians = await carla_client.spawn_pedestrians(query, count=count, speed=speed)
     if pedestrians:
@@ -1777,6 +2226,37 @@ async def spawn_vehicle(query: str, count: int = 1) -> str:
     """（实际功能：生成车辆）"""
     return await spawn_vehicle_impl(query, count=count)
 
+@mcp.tool()
+async def spawn_bicycle(query: str, count: int = 1) -> str:
+    """（实际功能：生成自行车）
+    
+    支持类型: crossbike(BH Crossbike), century(Diamondback Century), omafiets(Gazelle Omafiets)
+    """
+    return await spawn_bicycle_impl(query, count=count)
+
+@mcp.tool()
+async def spawn_motorcycle(query: str, count: int = 1) -> str:
+    """（实际功能：生成摩托车）
+    
+    支持类型: ninja(Kawasaki Ninja), yzf(Yamaha YZF), low_rider(Harley-Davidson Low Rider)
+    """
+    return await spawn_motorcycle_impl(query, count=count)
+
+@mcp.tool()
+async def spawn_prop(query: str, count: int = 1) -> str:
+    """（实际功能：生成道具/警示牌）
+    
+    支持类型: cone(施工锥), barrier(路障), warning(三角警示牌/交通警示牌)
+    """
+    return await spawn_prop_impl(query, count=count)
+
+@mcp.tool()
+async def spawn_overturned_vehicle(vehicle_type: str = 'model3') -> str:
+    """（实际功能：生成仰翻的车辆）
+    
+    支持类型: model3(特斯拉Model3), mustang(福特野马)等
+    """
+    return await spawn_overturned_vehicle_impl(vehicle_type)
 
 @mcp.tool()
 async def set_weather(weather_type: str) -> str:
@@ -1843,6 +2323,142 @@ async def stop_recording() -> str:
 class FastMCPGitHubAssistant:
     """FastMCP GitHub AI助手 - 集成Deepseek AI与FastMCP工具"""
 
+    VEHICLE_TYPES = {
+        "model3": "Tesla Model 3",
+        "a2": "Audi A2",
+        "etron": "Audi e-tron",
+        "tt": "Audi TT",
+        "grandtourer": "BMW Grand Tourer",
+        "i8": "BMW i8",
+        "mini": "BMW Mini",
+        "impala": "Chevrolet Impala",
+        "c3": "Citroen C3",
+        "charger_police": "Dodge Charger Police",
+        "charger2020": "Dodge Charger 2020",
+        "mustang": "Ford Mustang",
+        "crown": "Ford Crown",
+        "wrangler_rubicon": "Jeep Wrangler Rubicon",
+        "mkz_2017": "Lincoln MKZ 2017",
+        "mkz_2020": "Lincoln MKZ 2020",
+        "benz_coupe": "Mercedes-Benz Coupe",
+        "cabrio": "Mercedes-Benz Cabrio",
+        "ccc": "Mercedes-Benz CCC",
+        "cooper_s": "Mini Cooper S",
+        "micra": "Nissan Micra",
+        "patrol": "Nissan Patrol",
+        "leon": "Seat Leon",
+        "t2": "Volkswagen T2",
+        "t3": "Volkswagen T3",
+        "crossbike": "BH Crossbike",
+        "century": "Diamondback Century",
+        "omafiets": "Gazelle Omafiets"
+    }
+
+    VEHICLE_TYPE_MAP = {
+        "特斯拉": "model3",
+        "特斯拉model3": "model3",
+        "model3": "model3",
+        "奥迪": "a2",
+        "奥迪a2": "a2",
+        "a2": "a2",
+        "奥迪etron": "etron",
+        "etron": "etron",
+        "奥迪tt": "tt",
+        "tt": "tt",
+        "宝马": "grandtourer",
+        "宝马grandtourer": "grandtourer",
+        "grandtourer": "grandtourer",
+        "宝马i8": "i8",
+        "i8": "i8",
+        "宝马mini": "mini",
+        "mini": "mini",
+        "雪佛兰": "impala",
+        "雪佛兰impala": "impala",
+        "impala": "impala",
+        "雪铁龙": "c3",
+        "雪铁龙c3": "c3",
+        "c3": "c3",
+        "道奇": "charger2020",
+        "道奇警车": "charger_police",
+        "charger_police": "charger_police",
+        "道奇charger": "charger2020",
+        "charger2020": "charger2020",
+        "福特": "mustang",
+        "福特野马": "mustang",
+        "野马": "mustang",
+        "mustang": "mustang",
+        "福特crown": "crown",
+        "crown": "crown",
+        "吉普": "wrangler_rubicon",
+        "吉普牧马人": "wrangler_rubicon",
+        "牧马人": "wrangler_rubicon",
+        "wrangler_rubicon": "wrangler_rubicon",
+        "林肯": "mkz_2020",
+        "林肯mkz2017": "mkz_2017",
+        "mkz_2017": "mkz_2017",
+        "林肯mkz2020": "mkz_2020",
+        "mkz_2020": "mkz_2020",
+        "奔驰": "benz_coupe",
+        "奔驰轿跑": "benz_coupe",
+        "benz_coupe": "benz_coupe",
+        "奔驰敞篷": "cabrio",
+        "cabrio": "cabrio",
+        "奔驰ccc": "ccc",
+        "ccc": "ccc",
+        "迷你": "cooper_s",
+        "迷你cooper": "cooper_s",
+        "cooper_s": "cooper_s",
+        "日产": "patrol",
+        "日产micra": "micra",
+        "micra": "micra",
+        "日产patrol": "patrol",
+        "patrol": "patrol",
+        "西雅特": "leon",
+        "西雅特leon": "leon",
+        "leon": "leon",
+        "大众": "t2",
+        "大众t2": "t2",
+        "t2": "t2",
+        "大众t3": "t3",
+        "t3": "t3",
+        "自行车": "crossbike",
+        "单车": "crossbike",
+        "山地自行车": "crossbike",
+        "crossbike": "crossbike",
+        "公路自行车": "century",
+        "century": "century",
+        "荷兰自行车": "omafiets",
+        "omafiets": "omafiets"
+    }
+
+    PEDESTRIAN_TYPES = {
+        "pedestrian": "普通行人",
+        "elderly": "老年人",
+        "child": "儿童",
+        "police": "警察",
+        "business": "商务人士",
+        "jogger": "慢跑者"
+    }
+
+    PEDESTRIAN_TYPE_MAP = {
+        "普通行人": "pedestrian",
+        "行人": "pedestrian",
+        "人": "pedestrian",
+        "老年人": "elderly",
+        "老人": "elderly",
+        "儿童": "child",
+        "小孩": "child",
+        "孩子": "child",
+        "警察": "police",
+        "警官": "police",
+        "商务人士": "business",
+        "商人": "business",
+        "白领": "business",
+        "慢跑者": "jogger",
+        "跑步者": "jogger",
+        "跑步的人": "jogger"
+    }
+
     def __init__(self):
         # 将FastMCP工具转换为标准MCP工具格式供AI使用
         self.tools = [
@@ -1873,6 +2489,66 @@ class FastMCPGitHubAssistant:
                             "count": {"type": "integer", "description": "生成车辆数量，默认为1", "default": 1}
                         },
                         "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "spawn_bicycle",
+                    "description": "生成自行车。支持类型: crossbike(BH Crossbike), century(Diamondback Century), omafiets(Gazelle Omafiets)。数据量: 取决于地图生成点数量，通常支持1-20辆",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "自行车型号，如crossbike, century, omafiets", "enum": ["crossbike", "century", "omafiets"]},
+                            "count": {"type": "integer", "description": "生成自行车数量，默认为1", "default": 1}
+                        },
+                        "required": ["query"]
+                    }
+                }
+            },
+                        {
+                "type": "function",
+                "function": {
+                    "name": "spawn_motorcycle",
+                    "description": "生成摩托车。支持类型: ninja(Kawasaki Ninja), yzf(Yamaha YZF), low_rider(Harley-Davidson Low Rider)。数据量: 取决于地图生成点数量，通常支持1-20辆",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "摩托车型号，如ninja, yzf, low_rider", "enum": ["ninja", "yzf", "low_rider"]},
+                            "count": {"type": "integer", "description": "生成摩托车数量，默认为1", "default": 1}
+                        },
+                        "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "spawn_prop",
+                    "description": "生成静态道具/警示牌，可指定放在某个actor（如仰翻车辆）后方。支持类型: cone(施工锥), barrier(路障), warning(三角警示牌)。数据量: 通常支持1-50个",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string", "description": "道具类型，如cone, barrier, warning", "enum": ["cone", "barrier", "warning"]},
+                            "count": {"type": "integer", "description": "生成道具数量，默认为1", "default": 1},
+                            "target_id": {"type": "integer", "description": "目标actor ID，道具将放置在该目标后方5米处。如仰翻车辆的ID", "default": None}
+                        },
+                        "required": ["query"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "spawn_overturned_vehicle",
+                    "description": "生成仰翻/侧翻的车辆，用于模拟事故场景。支持类型: model3(特斯拉Model3), mustang(福特野马), a2(奥迪A2)",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "vehicle_type": {"type": "string", "description": "车辆类型，如model3, mustang, a2", "enum": ["model3", "mustang", "a2"], "default": "model3"}
+                        },
+                        "required": []
                     }
                 }
             },
@@ -2093,10 +2769,9 @@ class FastMCPGitHubAssistant:
         try:
             # 调用实际的工具实现函数（避免FastMCP装饰器问题）
             if function_name == "connect_carla":
-                result = await connect_carla_impl(
-                    host=arguments.get("host", "localhost"),
-                    port=arguments.get("port", 2000)
-                )
+                host = arguments.get("host", "localhost")
+                port = arguments.get("port", 2000)
+                result = await carla_client.connect(host, port)
                 return {
                     "success": True,
                     "data": result
@@ -2106,7 +2781,63 @@ class FastMCPGitHubAssistant:
                 app_logger.info(f"spawn_vehicle参数详情: {arguments}")
                 result = await spawn_vehicle_impl(
                     query=arguments["query"],
-                    count=arguments.get("count", 1)
+                    count=int(arguments.get("count", 1))
+                )
+                return {
+                    "success": True,
+                    "data": result
+                }
+
+            elif function_name == "spawn_bicycle":
+                app_logger.info(f"spawn_bicycle参数详情: {arguments}")
+                result = await spawn_bicycle_impl(
+                    query=arguments["query"],
+                    count=int(arguments.get("count", 1))
+                )
+                return {
+                    "success": True,
+                    "data": result
+                }
+
+            elif function_name == "spawn_motorcycle":
+                app_logger.info(f"spawn_motorcycle参数详情: {arguments}")
+                result = await spawn_motorcycle_impl(
+                    query=arguments["query"],
+                    count=int(arguments.get("count", 1))
+                )
+                return {
+                    "success": True,
+                    "data": result
+                }
+
+            elif function_name == "spawn_prop":
+                app_logger.info(f"spawn_prop参数详情: {arguments}")
+                result = await spawn_prop_impl(
+                    query=arguments["query"],
+                    count=int(arguments.get("count", 1)),
+                    target_id=arguments.get("target_id")
+                )
+                return {
+                    "success": True,
+                    "data": result
+                }
+
+            elif function_name == "spawn_overturned_vehicle":
+                app_logger.info(f"spawn_overturned_vehicle参数详情: {arguments}")
+                result = await spawn_overturned_vehicle_impl(
+                    vehicle_type=arguments.get("vehicle_type", "model3")
+                )
+                return {
+                    "success": True,
+                    "data": result
+                }
+
+            elif function_name == "spawn_pedestrian":
+                app_logger.info(f"spawn_pedestrian参数详情: {arguments}")
+                result = await spawn_pedestrian_impl(
+                    query=arguments["query"],
+                    count=int(arguments.get("count", 1)),
+                    speed=arguments.get("speed")
                 )
                 return {
                     "success": True,
@@ -2114,146 +2845,126 @@ class FastMCPGitHubAssistant:
                 }
 
             elif function_name == "set_weather":
-                result = await set_weather_impl(
-                    weather_type=arguments.get("weather_type", "clear")
-                )
+                result = await carla_client.set_weather(arguments["weather_type"])
                 return {
                     "success": True,
                     "data": result
                 }
-            elif function_name == "get_traffic_lights":
-                result = await get_traffic_lights_impl(
-                    query=arguments["query"],
-                    user_type=arguments.get("user_type")
+
+            elif function_name == "set_synchronous_mode":
+                result = await carla_client.set_synchronous_mode(
+                    arguments.get("enabled", True),
+                    arguments.get("fixed_delta_seconds", 0.05)
                 )
                 return {
                     "success": True,
                     "data": result
                 }
 
-            elif function_name == "cleanup_scene":
-                result = await cleanup_scene_impl(
-                    language=arguments.get("language"),
-                    period=arguments.get("period", "daily")
-                )
-                return {
-                    "success": True,
-                    "data": result
-                }
-            
-            elif function_name == "spawn_pedestrian":
-                result = await spawn_pedestrian_impl(
-                    query=arguments["query"],
-                    count=arguments.get("count", 1),
-                    speed=arguments.get("speed")
-                )
-                return {
-                    "success": True,
-                    "data": result
-                }
             elif function_name == "setup_autopilot":
-                result = await setup_autopilot_impl(
-                    enable=arguments.get("enable", True),
-                    radius=arguments.get("radius", 50.0)
+                result = await carla_client.setup_autopilot(
+                    arguments.get("enable", True),
+                    arguments.get("radius", 0.0)
                 )
                 return {
                     "success": True,
                     "data": result
                 }
-            elif function_name == "setup_pedestrian_movement":
-                result = await setup_pedestrian_movement_impl(
-                    enable=arguments.get("enable", True),
-                    radius=arguments.get("radius", 50.0)
+
+            elif function_name == "switch_view_mode":
+                result = await carla_client.switch_view_mode(
+                    arguments.get("view_mode", "third_person"),
+                    arguments.get("target_id")
                 )
                 return {
                     "success": True,
                     "data": result
                 }
-            elif function_name == "switch_view":
-                result = await switch_view_impl(
-                    view_mode=arguments.get("view_mode", "third_person"),
-                    target_actor_id=arguments.get("target_actor_id")
-                )
-                return {
-                    "success": True,
-                    "data": result
-                }
+
             elif function_name == "start_recording":
-                result = await start_recording_impl(
-                    fps=arguments.get("fps", 30)
+                result = await carla_client.start_recording(
+                    arguments.get("filename", "simulation_recording"),
+                    arguments.get("duration", 30)
                 )
                 return {
                     "success": True,
                     "data": result
                 }
+
             elif function_name == "stop_recording":
-                result = await stop_recording_impl()
+                result = await carla_client.stop_recording()
                 return {
                     "success": True,
                     "data": result
                 }
-            elif function_name == "generate_sumo_network":
-                result = await generate_sumo_network_impl(
-                    grid_x=arguments.get("grid_x", 3),
-                    grid_y=arguments.get("grid_y", 3),
-                    duration=arguments.get("duration", 200),
-                    rate=arguments.get("rate", 2.0)
+
+            elif function_name == "set_third_person_view":
+                result = await carla_client.set_third_person_view(arguments.get("target_id"))
+                return {
+                    "success": True,
+                    "data": result
+                }
+
+            elif function_name == "set_first_person_view":
+                result = await carla_client.set_first_person_view(arguments.get("target_id"))
+                return {
+                    "success": True,
+                    "data": result
+                }
+
+            elif function_name == "set_overhead_view":
+                result = await carla_client.set_overhead_view(arguments.get("target_id"))
+                return {
+                    "success": True,
+                    "data": result
+                }
+
+            elif function_name == "set_free_view":
+                result = await carla_client.set_free_view()
+                return {
+                    "success": True,
+                    "data": result
+                }
+
+            elif function_name == "start_view_follow":
+                result = await carla_client.start_view_follow(
+                    arguments.get("view_mode", "third_person"),
+                    arguments.get("target_id")
                 )
                 return {
                     "success": True,
                     "data": result
                 }
-            
+
+            elif function_name == "stop_view_follow":
+                result = await carla_client.stop_view_follow()
+                return {
+                    "success": True,
+                    "data": result
+                }
+
+            elif function_name == "spawn_sumo_grid_network":
+                result = await spawn_sumo_grid_network_impl(
+                    grid_size=arguments.get("grid_size", 3),
+                    simulation_time=arguments.get("simulation_time", 200),
+                    vehicle_spawn_interval=arguments.get("vehicle_spawn_interval", 2)
+                )
+                return {
+                    "success": True,
+                    "data": result
+                }
+
             elif function_name == "generate_openscenario":
                 result = await generate_openscenario_impl(
-                    xodr_filename=arguments.get("xodr_filename", ""),
-                    scenario_name=arguments.get("scenario_name", "my_scenario"),
-                    duration=arguments.get("duration", 30.0),
-                    vehicle_speed=arguments.get("vehicle_speed", 10.0)
-                )
-                return {"success": True, "data": result}
-
-            elif function_name == "search_github_repositories":
-                result = await search_github_repositories_impl(
-                    query=arguments["query"],
-                    language=arguments.get("language"),
-                    sort=arguments.get("sort", "stars"),
-                    limit=arguments.get("limit", 8)
+                    xodr_file=arguments.get("xodr_file", "web_generated.xodr"),
+                    vehicle_speed=arguments.get("vehicle_speed", 10.0),
+                    duration=arguments.get("duration", 30.0)
                 )
                 return {
                     "success": True,
                     "data": result
                 }
 
-            elif function_name == "get_repository_details":
-                result = await get_repository_details_impl(
-                    owner=arguments["owner"],
-                    repo=arguments["repo"]
-                )
-                return {
-                    "success": True,
-                    "data": result
-                }
-
-            elif function_name == "search_github_users":
-                result = await search_github_users_impl(
-                    query=arguments["query"],
-                    user_type=arguments.get("user_type")
-                )
-                return {
-                    "success": True,
-                    "data": result
-                }
-
-            elif function_name == "get_trending_repositories":
-                result = await get_trending_repositories_impl(
-                    language=arguments.get("language"),
-                    period=arguments.get("period", "daily")
-                )
-                return {
-                    "success": True,
-                    "data": result
-                }
             else:
                 return {
                     "success": False,
@@ -2268,7 +2979,7 @@ class FastMCPGitHubAssistant:
             }
 
     # 定义车辆和行人的类型信息
-    VEHICLE_TYPES = {
+        VEHICLE_TYPES = {
         "model3": "Tesla Model 3",
         "a2": "Audi A2",
         "etron": "Audi e-tron",
@@ -2293,16 +3004,17 @@ class FastMCPGitHubAssistant:
         "patrol": "Nissan Patrol",
         "leon": "Seat Leon",
         "t2": "Volkswagen T2",
-        "t3": "Volkswagen T3"
+        "t3": "Volkswagen T3",
+        "crossbike": "BH Crossbike",
+        "century": "Diamondback Century",
+        "omafiets": "Gazelle Omafiets"
     }
 
     # 车辆中文到英文的映射
     VEHICLE_TYPE_MAP = {
-        # Tesla
         "特斯拉": "model3",
         "特斯拉model3": "model3",
         "model3": "model3",
-        # Audi
         "奥迪": "a2",
         "奥迪a2": "a2",
         "a2": "a2",
@@ -2310,7 +3022,6 @@ class FastMCPGitHubAssistant:
         "etron": "etron",
         "奥迪tt": "tt",
         "tt": "tt",
-        # BMW
         "宝马": "grandtourer",
         "宝马grandtourer": "grandtourer",
         "grandtourer": "grandtourer",
@@ -2318,39 +3029,33 @@ class FastMCPGitHubAssistant:
         "i8": "i8",
         "宝马mini": "mini",
         "mini": "mini",
-        # Chevrolet
         "雪佛兰": "impala",
         "雪佛兰impala": "impala",
         "impala": "impala",
-        # Citroen
         "雪铁龙": "c3",
         "雪铁龙c3": "c3",
         "c3": "c3",
-        # Dodge
         "道奇": "charger2020",
         "道奇警车": "charger_police",
+        "警车": "charger_police",
         "charger_police": "charger_police",
         "道奇charger": "charger2020",
         "charger2020": "charger2020",
-        # Ford
         "福特": "mustang",
         "福特野马": "mustang",
         "野马": "mustang",
         "mustang": "mustang",
         "福特crown": "crown",
         "crown": "crown",
-        # Jeep
         "吉普": "wrangler_rubicon",
         "吉普牧马人": "wrangler_rubicon",
         "牧马人": "wrangler_rubicon",
         "wrangler_rubicon": "wrangler_rubicon",
-        # Lincoln
         "林肯": "mkz_2020",
         "林肯mkz2017": "mkz_2017",
         "mkz_2017": "mkz_2017",
         "林肯mkz2020": "mkz_2020",
         "mkz_2020": "mkz_2020",
-        # Mercedes
         "奔驰": "benz_coupe",
         "奔驰轿跑": "benz_coupe",
         "benz_coupe": "benz_coupe",
@@ -2358,28 +3063,31 @@ class FastMCPGitHubAssistant:
         "cabrio": "cabrio",
         "奔驰ccc": "ccc",
         "ccc": "ccc",
-        # Mini
         "迷你": "cooper_s",
         "迷你cooper": "cooper_s",
         "cooper_s": "cooper_s",
-        # Nissan
         "日产": "patrol",
         "日产micra": "micra",
         "micra": "micra",
         "日产patrol": "patrol",
         "patrol": "patrol",
-        # Seat
         "西雅特": "leon",
         "西雅特leon": "leon",
         "leon": "leon",
-        # Volkswagen
         "大众": "t2",
         "大众t2": "t2",
         "t2": "t2",
         "大众t3": "t3",
-        "t3": "t3"
+        "t3": "t3",
+        "自行车": "crossbike",
+        "单车": "crossbike",
+        "山地自行车": "crossbike",
+        "crossbike": "crossbike",
+        "公路自行车": "century",
+        "century": "century",
+        "荷兰自行车": "omafiets",
+        "omafiets": "omafiets"
     }
-
     PEDESTRIAN_TYPES = {
         "pedestrian": "普通行人",
         "elderly": "老年人",
@@ -2409,8 +3117,7 @@ class FastMCPGitHubAssistant:
         "跑步的人": "jogger"
     }
     def _check_spawn_intent(self, message):
-
-        """检测用户是否有生成车辆或行人的意图，但缺少必要参数"""
+        """检测用户是否有生成车辆、自行车或行人的意图，但缺少必要参数"""
         message = message.lower()
 
         # 首先排除 SUMO 路网生成相关的指令
@@ -2422,6 +3129,8 @@ class FastMCPGitHubAssistant:
                     'needs_vehicle_count': False,
                     'needs_pedestrian_type': False,
                     'needs_pedestrian_count': False,
+                    'needs_bicycle_type': False,
+                    'needs_bicycle_count': False,
                     'is_ambiguous': False
                 }
 
@@ -2433,10 +3142,12 @@ class FastMCPGitHubAssistant:
                 'needs_vehicle_count': False,
                 'needs_pedestrian_type': False,
                 'needs_pedestrian_count': False,
+                'needs_bicycle_type': False,
+                'needs_bicycle_count': False,
                 'is_ambiguous': False
             }
 
-         # 排除自动驾驶相关指令（不是生成车辆）
+        # 排除自动驾驶相关指令（不是生成车辆）
         autopilot_keywords = ['自动驾驶', '车辆运行', '车自己开', '开启自动驾驶', '让车', '让车辆']
         if any(kw in message for kw in autopilot_keywords):
             return {
@@ -2444,38 +3155,76 @@ class FastMCPGitHubAssistant:
                 'needs_vehicle_count': False,
                 'needs_pedestrian_type': False,
                 'needs_pedestrian_count': False,
+                'needs_bicycle_type': False,
+                'needs_bicycle_count': False,
                 'is_ambiguous': False
             }
-
-        # 车辆相关关键词
-        vehicle_keywords = ['车', '车辆', '汽车', '生成车', '创建车', '来车', '加车', '添加车辆']
-        pedestrian_keywords = ['行人', '生成行人', '创建行人', '添加行人', '路人']
-        person_spawn_verbs = ['生成', '创建', '来', '加', '添加', '放', 'spawn']
 
         import re
         has_count = bool(re.search(r'\d+\s*[辆个]', message))
 
+        # ===== 先初始化 result =====
+        result = {
+            'needs_vehicle_type': False,
+            'needs_vehicle_count': False,
+            'needs_pedestrian_type': False,
+            'needs_pedestrian_count': False,
+            'needs_bicycle_type': False,
+            'needs_bicycle_count': False,
+            'is_ambiguous': False
+        }
+
+        # 1️⃣ 仰翻车辆检测（最优先，默认 model3，不提示用户）
+        overturned_keywords = ['仰翻', '侧翻', '翻车', '事故车', '翻了', '底朝天']
+        has_overturned_request = any(kw in message for kw in overturned_keywords)
+        if has_overturned_request:
+            return result  # 直接放行，AI 会默认用 model3
+
+        # 2️⃣ 摩托车检测（在普通车辆之前，因为"摩托车"含"车"字）
+        motorcycle_keywords = ['摩托车', '生成摩托车', '来辆摩托车', '添加摩托车']
+        has_motorcycle_request = any(kw in message for kw in motorcycle_keywords)
+        if has_motorcycle_request:
+            return result  # 直接放行，AI 会默认用 ninja
+
+        # 3️⃣ 道具检测
+        prop_keywords = ['施工锥', '路障', '警示牌', '三角警示牌', '生成道具']
+        has_prop_request = any(kw in message for kw in prop_keywords)
+        if has_prop_request:
+            return result  # 直接放行，AI 会默认用 cone
+
+        # 4️⃣ 自行车检测
+        bicycle_keywords = ['自行车', '单车', '生成自行车', '来辆自行车', '添加自行车']
+        has_bicycle_request = any(kw in message for kw in bicycle_keywords)
+        has_bicycle_type = any(btype in message for btype in ['山地', '公路', '荷兰', 'crossbike', 'century', 'omafiets'])
+        if has_bicycle_request and not has_bicycle_type:
+            result['needs_bicycle_type'] = True
+            result['needs_bicycle_count'] = not has_count
+            result['is_ambiguous'] = True
+            return result
+
+        # 5️⃣ 车辆检测（最后，避免被"摩托车"等含"车"字的词误触发）
+        vehicle_keywords = ['车辆', '汽车', '生成车', '创建车', '来车', '加车', '添加车辆']
+        # 排除已处理的类型，避免"摩托车"触发
+        if has_motorcycle_request or has_prop_request or has_overturned_request:
+            is_vehicle_request = False
+        else:
+            is_vehicle_request = any(kw in message for kw in vehicle_keywords) or ('车' in message and '摩托车' not in message and '自行车' not in message)
+        
         has_vehicle_type = any(vtype in message for vtype in self.VEHICLE_TYPES.keys()) or \
                            any(vname in message for vname in self.VEHICLE_TYPE_MAP.keys())
+
+        # 6️⃣ 行人检测
+        pedestrian_keywords = ['行人', '生成行人', '创建行人', '添加行人', '路人']
+        person_spawn_verbs = ['生成', '创建', '来', '加', '添加', '放', 'spawn']
         specific_pedestrian_keywords = set(self.PEDESTRIAN_TYPES.keys()) | set(self.PEDESTRIAN_TYPE_MAP.keys()) - {"行人", "人"}
         has_pedestrian_type = any(ptype in message for ptype in specific_pedestrian_keywords)
-
-        is_vehicle_request = any(kw in message for kw in vehicle_keywords)
-
         is_pedestrian_request = any(kw in message for kw in pedestrian_keywords)
         if not is_pedestrian_request and '人' in message:
             has_spawn_verb = any(verb in message for verb in person_spawn_verbs)
             if has_spawn_verb and '人称' not in message:
                 is_pedestrian_request = True
 
-        result = {
-            'needs_vehicle_type': False,
-            'needs_vehicle_count': False,
-            'needs_pedestrian_type': False,
-            'needs_pedestrian_count': False,
-            'is_ambiguous': False
-        }
-
+        # 设置结果
         if is_vehicle_request and not has_vehicle_type:
             result['needs_vehicle_type'] = True
             result['needs_vehicle_count'] = not has_count
@@ -2492,31 +3241,52 @@ class FastMCPGitHubAssistant:
         """生成参数询问提示"""
         prompt_parts = []
 
-        if check_result['needs_vehicle_type']:
-            # 使用中文展示可用的车辆类型
-            vehicle_list = "\n".join([f"  • {name} ({key})" for key, name in self.VEHICLE_TYPES.items()])
+        if check_result.get('needs_vehicle_type'):
+            vehicle_list = "\n".join([f"  • {name} ({key})" for key, name in self.VEHICLE_TYPES.items() if key not in ['crossbike', 'century', 'omafiets']])
             prompt_parts.append(f"🚗 **可用车辆类型：**\n{vehicle_list}")
 
-        if check_result['needs_vehicle_count']:
+        if check_result.get('needs_vehicle_count'):
             prompt_parts.append("🚗 **车辆数量：** 支持生成 1-100+ 辆车（取决于地图可用生成点数量）")
 
-        if check_result['needs_pedestrian_type']:
-            # 使用中文展示可用的行人类型
+        if check_result.get('needs_bicycle_type'):
+            prompt_parts.append("🚲 **可用自行车类型：**\n  • 山地自行车 (crossbike)\n  • 公路自行车 (century)\n  • 荷兰自行车 (omafiets)")
+
+        if check_result.get('needs_motorcycle_type') or check_result.get('needs_motorcycle_count'):
+                prompt_parts.append('  • "生成3辆川崎忍者摩托车"')
+                prompt_parts.append('  • "来5辆雅马哈YZF"')
+                prompt_parts.append('  • "生成2辆哈雷"')
+
+        if check_result.get('needs_prop_type') or check_result.get('needs_prop_count'):
+                prompt_parts.append('  • "生成3个施工锥"')
+                prompt_parts.append('  • "来5个三角警示牌"')
+                prompt_parts.append('  • "生成2个路障"')
+
+        if check_result.get('needs_bicycle_count'):
+            prompt_parts.append("🚲 **自行车数量：** 支持生成 1-20 辆")
+
+        if check_result.get('needs_pedestrian_type'):
             pedestrian_list = "\n".join([f"  • {name} ({key})" for key, name in self.PEDESTRIAN_TYPES.items()])
             prompt_parts.append(f"🚶 **可用行人类型：**\n{pedestrian_list}")
 
-        if check_result['needs_pedestrian_count']:
+        if check_result.get('needs_pedestrian_count'):
             prompt_parts.append("🚶 **行人数量：** 支持生成 1-100+ 个行人（取决于地图大小）")
 
         if prompt_parts:
             prompt_parts.insert(0, "请提供以下信息以完成生成：\n")
             prompt_parts.append("\n💡 **示例指令：**")
-            if check_result['needs_vehicle_type'] or check_result['needs_vehicle_count']:
+            
+            if check_result.get('needs_vehicle_type') or check_result.get('needs_vehicle_count'):
                 prompt_parts.append('  • "生成5辆特斯拉"')
                 prompt_parts.append('  • "来10辆福特野马"')
                 prompt_parts.append('  • "生成3辆宝马"')
                 prompt_parts.append('  • "来5辆奔驰"')
-            if check_result['needs_pedestrian_type'] or check_result['needs_pedestrian_count']:
+            
+            if check_result.get('needs_bicycle_type') or check_result.get('needs_bicycle_count'):
+                prompt_parts.append('  • "生成3辆山地自行车"')
+                prompt_parts.append('  • "来5辆公路自行车"')
+                prompt_parts.append('  • "生成2辆荷兰自行车"')
+            
+            if check_result.get('needs_pedestrian_type') or check_result.get('needs_pedestrian_count'):
                 prompt_parts.append('  • "生成3个老年人"')
                 prompt_parts.append('  • "来5个警察"')
                 prompt_parts.append('  • "生成2个儿童"')
@@ -2703,6 +3473,44 @@ CARLA相关：
 - 当用户提到"多辆车"、"生成X辆车"、"几辆车"、指定数量（如5辆、10辆），必须设置count参数为对应数字
 - 车辆类型支持中文：特斯拉(model3)、奥迪(a2/etron/tt)、宝马(grandtourer/i8/mini)、雪佛兰(impala)、雪铁龙(c3)、道奇(charger_police/charger2020)、福特(mustang/crown)、吉普(wrangler_rubicon)、林肯(mkz_2017/mkz_2020)、奔驰(benz_coupe/cabrio/ccc)、迷你(cooper_s)、日产(micra/patrol)、西雅特(leon)、大众(t2/t3)
 - 当用户使用中文车辆类型（如"生成3辆特斯拉"），你需要将中文类型转换为对应的英文类型：model3、a2、etron、tt、grandtourer、i8、mini、impala、c3、charger_police、charger2020、mustang、crown、wrangler_rubicon、mkz_2017、mkz_2020、benz_coupe、cabrio、ccc、cooper_s、micra、patrol、leon、t2、t3
+- 当用户提到"自行车"、"单车"、"生成自行车"、"来辆自行车"等，使用spawn_bicycle，count参数默认为1
+- 自行车类型支持中文：山地自行车/crossbike(默认)、公路自行车/century、荷兰自行车/omafiets
+- 当用户使用中文自行车类型（如"生成3辆山地自行车"），你需要将中文类型转换为对应的英文类型：crossbike、century、omafiets
+- 示例指令：
+  - "生成一辆自行车" -> spawn_bicycle(query="crossbike", count=1)
+  - "生成5辆山地自行车" -> spawn_bicycle(query="crossbike", count=5)
+  - "来3辆公路自行车" -> spawn_bicycle(query="century", count=3)
+- 当用户说"生成一辆摩托车"没有指定类型时，默认使用 ninja（川崎忍者）
+- 当用户说"生成一辆仰翻的车辆"没有指定类型时，默认使用 model3（特斯拉）
+- 当用户说"生成道具"没有指定类型时，默认使用 cone（施工锥）
+- 当用户提到"摩托车"、"生成摩托车"、"来辆摩托车"等，使用spawn_motorcycle，count参数默认为1
+- 摩托车类型支持中文：川崎忍者/ninja(默认)、雅马哈YZF/yzf、哈雷low_rider
+- 示例指令：
+  - "生成一辆摩托车" -> spawn_motorcycle(query="ninja", count=1)
+  - "生成3辆雅马哈" -> spawn_motorcycle(query="yzf", count=3)
+
+- 当用户提到"施工锥"、"路障"、"警示牌"、"三角警示牌"、"生成道具"等，使用spawn_prop，count参数默认为1
+- 道具类型支持中文：施工锥/cone(默认)、路障/barrier、警示牌/warning
+- 示例指令：
+  - "生成3个施工锥" -> spawn_prop(query="cone", count=3)
+  - "来5个三角警示牌" -> spawn_prop(query="warning", count=5)
+  - "生成路障" -> spawn_prop(query="barrier", count=1)
+- 当用户说"在仰翻车辆后方放警示牌"、"在事故车后面放锥桶"时，需要：
+  1. 先确认仰翻车辆的ID（如果刚生成，ID会在返回结果中）
+  2. 使用 spawn_prop 并传入 target_id=仰翻车辆ID
+- 示例指令：
+  - "在ID 32的后方放3个施工锥" -> spawn_prop(query="cone", count=3, target_id=32)
+  - "在仰翻车辆后面放三角警示牌" -> 先问用户仰翻车辆的ID，或如果刚生成则直接用该ID
+  - "给事故车后方放路障" -> spawn_prop(query="barrier", count=2, target_id=事故车ID)
+
+- 当用户提到"仰翻"、"侧翻"、"翻车"、"事故车"、"翻了的特斯拉"等，使用spawn_overturned_vehicle
+- 示例指令：
+  - "生成一辆仰翻的特斯拉" -> spawn_overturned_vehicle(vehicle_type="model3")
+  - "来一辆侧翻的野马" -> spawn_overturned_vehicle(vehicle_type="mustang")
+
+- 当用户提到"薄雾"、"轻雾"、"雾天（轻）"等，使用set_weather，weather_type设为"light_fog"
+- 示例指令：
+  - "设置薄雾天气" -> set_weather(weather_type="light_fog")
 - 当用户提到"行人"、"生成行人"、"创建行人"、"人"等，直接使用spawn_pedestrian，count参数默认为1
 - 当用户提到"多个行人"、"生成X个行人"、"几个行人"、指定数量（如5个、10个），必须设置count参数为对应数字
 - 行人类型支持中文：普通行人/行人/人、老年人/老人、儿童/小孩/孩子、警察/警官、商务人士/商人/白领、慢跑者/跑步者/跑步的人
@@ -3349,6 +4157,18 @@ def get_web_interface():
         💡 也支持自然语言自定义参数：<em>"生成4x4网格路网，跑300秒"</em> 或 <em>"生成5x5网格路网，跑500秒，每3秒发一辆车"</em>
     </div>
 </div>
+<div style="margin-top: 15px; border-top: 2px dashed #10b981; padding-top: 10px;">
+        <h3 style="color: #10b981;">🎬 场景与道具（新增功能）</h3>
+        <div class="examples-grid">
+            <div class="example-item" style="border-left-color: #10b981;" onclick="askExample('生成一辆山地自行车')">🚲 生成自行车</div>
+            <div class="example-item" style="border-left-color: #10b981;" onclick="askExample('生成一辆摩托车')">🏍️ 生成摩托车</div>
+            <div class="example-item" style="border-left-color: #10b981;" onclick="askExample('生成3个施工锥')">🚧 生成道具</div>
+            <div class="example-item" style="border-left-color: #10b981;" onclick="askExample('生成一辆仰翻的车辆')">🚓💥 仰翻汽车</div>
+            <div class="example-item" style="border-left-color: #10b981;" onclick="askExample('设置薄雾天气')">🌫️ 薄雾天气</div>
+            <div class="example-item" style="border-left-color: #10b981;" onclick="askExample('生成一辆警车')">🚓 生成警车</div>
+        </div>
+    </div>
+
 </div> 
                 </div>
                 <div class="loading" id="loading">

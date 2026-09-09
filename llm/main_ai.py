@@ -4888,10 +4888,10 @@ def get_web_interface():
 
     <!-- ===== 周计划场景快捷按钮 ===== -->
     <div class="quick-panel">
-        <div class="quick-title">🗓️ 周计划场景快捷按钮（点击直接执行，无需输入）</div>
+        <div class="quick-title">⚡ 场景快捷按钮（点击直接执行，无需输入）</div>
 
         <div class="week-group">
-            <div class="week-label"><span class="w1">第1周（9/8–9/14）✅ 已上线</span></div>
+            <div class="week-label"><span class="w1">🛣️ 道路结构场景</span></div>
             <div class="quick-btns">
                 <button class="qbtn qbtn-w1" onclick="runQuickTool('scenario_highway_ramp', {ramp_type: 'on'}, this)">🛣️ 匝道汇入</button>
                 <button class="qbtn qbtn-w1" onclick="runQuickTool('scenario_highway_ramp', {ramp_type: 'off'}, this)">🛣️ 匝道驶出</button>
@@ -4902,7 +4902,7 @@ def get_web_interface():
         </div>
 
         <div class="week-group">
-            <div class="week-label">第2周（9/15–9/21）🔨 开发中</div>
+            <div class="week-label">🚦 路口与特殊形态目标</div>
             <div class="quick-btns">
                 <button class="qbtn" disabled>🚦 路口+红绿灯</button>
                 <button class="qbtn" disabled>🚇 隧道</button>
@@ -4914,7 +4914,7 @@ def get_web_interface():
         </div>
 
         <div class="week-group">
-            <div class="week-label">第3周（9/22–9/28）🔨 开发中</div>
+            <div class="week-label">👮 特殊群体、光照与危险行为</div>
             <div class="quick-btns">
                 <button class="qbtn" disabled>👮 交警/轮椅</button>
                 <button class="qbtn" disabled>🌙 弱光</button>
@@ -4926,7 +4926,7 @@ def get_web_interface():
         </div>
 
         <div class="week-group">
-            <div class="week-label">第4周（9/29–10/5）🔨 开发中</div>
+            <div class="week-label">⚠️ 复杂危险场景</div>
             <div class="quick-btns">
                 <button class="qbtn" disabled>👻 前车消失</button>
                 <button class="qbtn" disabled>🏃 路口危险横穿</button>
@@ -4943,7 +4943,7 @@ def get_web_interface():
                 <button class="qbtn qbtn-util" onclick="runQuickTool('cleanup_scene', {}, this)">🧹 清理场景</button>
             </div>
         </div>
-        <div class="quick-note">💡 场景按钮基于当前地图自动选址；高速匝道类场景推荐使用 Town04/Town06 地图。开发中的按钮将随各周功能完成自动启用。</div>
+        <div class="quick-note">💡 场景按钮基于当前地图自动选址，推荐 Town04（高速匝道/隧道/环岛均可）；Town03 地图不可用。</div>
     </div>
 
 </div> 
@@ -12386,10 +12386,10 @@ def get_web_interface():
 
     <!-- ===== 周计划场景快捷按钮 ===== -->
     <div class="quick-panel">
-        <div class="quick-title">🗓️ 周计划场景快捷按钮（点击直接执行，无需输入）</div>
+        <div class="quick-title">⚡ 场景快捷按钮（点击直接执行，无需输入）</div>
 
         <div class="week-group">
-            <div class="week-label"><span class="w1">第1周（9/8–9/14）✅ 已上线</span></div>
+            <div class="week-label"><span class="w1">🛣️ 道路结构场景</span></div>
             <div class="quick-btns">
                 <button class="qbtn qbtn-w1" onclick="runQuickTool('scenario_highway_ramp', {ramp_type: 'on'}, this)">🛣️ 匝道汇入</button>
                 <button class="qbtn qbtn-w1" onclick="runQuickTool('scenario_highway_ramp', {ramp_type: 'off'}, this)">🛣️ 匝道驶出</button>
@@ -12400,7 +12400,7 @@ def get_web_interface():
         </div>
 
         <div class="week-group">
-            <div class="week-label"><span style="color:#3b82f6;">第2周（9/15–9/21）✅ 已上线</span></div>
+            <div class="week-label"><span style="color:#3b82f6;">🚦 路口与特殊形态目标</span></div>
             <div class="quick-btns">
                 <button class="qbtn" onclick="runQuickTool('scenario_junction_light', {}, this)">🚦 路口+红绿灯</button>
                 <button class="qbtn" onclick="runQuickTool('scenario_tunnel', {}, this)">🚇 隧道</button>
@@ -12412,7 +12412,7 @@ def get_web_interface():
         </div>
 
         <div class="week-group">
-            <div class="week-label"><span style="color:#8b5cf6;">第3周（9/22–9/28）✅ 已上线</span></div>
+            <div class="week-label"><span style="color:#8b5cf6;">👮 特殊群体、光照与危险行为</span></div>
             <div class="quick-btns">
                 <button class="qbtn" onclick="runQuickTool('scenario_officer', {element: 'traffic_police'}, this)">👮 交警/轮椅</button>
                 <button class="qbtn" onclick="runQuickTool('set_lighting', {condition: 'dusk'}, this)">🌙 弱光</button>
@@ -12424,7 +12424,7 @@ def get_web_interface():
         </div>
 
         <div class="week-group">
-            <div class="week-label"><span style="color:#f59e0b;">第4周（9/29–10/5）✅ 已上线</span></div>
+            <div class="week-label"><span style="color:#f59e0b;">⚠️ 复杂危险场景</span></div>
             <div class="quick-btns">
                 <button class="qbtn" onclick="runQuickTool('scenario_lead_disappear', {}, this)">👻 前车消失</button>
                 <button class="qbtn" onclick="runQuickTool('scenario_crossing_hazard', {crosser: 'pedestrian'}, this)">🏃 路口危险横穿</button>
@@ -12441,7 +12441,7 @@ def get_web_interface():
                 <button class="qbtn qbtn-util" onclick="runQuickTool('cleanup_scene', {}, this)">🧹 清理场景</button>
             </div>
         </div>
-        <div class="quick-note">💡 场景按钮基于当前地图自动选址：隧道推荐Town04/Town05、环岛推荐Town05、高速匝道推荐Town04。蹲下/躺下/打伞为硬摆姿态、货车用Sprinter近似等限制会在执行结果中说明。</div>
+        <div class="quick-note">💡 场景按钮基于当前地图自动选址，推荐 Town04（高速匝道/隧道/环岛均可）；Town03 地图不可用。蹲下/躺下/打伞为硬摆姿态、货车用Sprinter近似等限制会在执行结果中说明。</div>
     </div>
 
 </div> 

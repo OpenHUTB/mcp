@@ -5064,6 +5064,102 @@ class FastMCPGitHubAssistant:
                         "required": []
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "control_walker",
+                    "description": "控制行人停止或恢复移动。支持 stop(停止指定行人)、resume(恢复指定行人)、stop_all(停止所有行人)、resume_all(恢复所有行人)",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "action": {"type": "string", "enum": ["stop", "resume", "stop_all", "resume_all"], "description": "操作类型"},
+                            "walker_id": {"type": "integer", "description": "行人ID，stop/resume时需要"}
+                        },
+                        "required": ["action"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "spawn_vehicle_param",
+                    "description": "参数化生成车辆，支持参照物/距离/角度/速度控制。当用户要求精确控制生成位置时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "count": {"type": "integer", "description": "生成数量", "default": 1},
+                            "blueprint_filter": {"type": "string", "description": "蓝图过滤，如 vehicle.tesla.model3", "default": "vehicle.*"},
+                            "autopilot": {"type": "boolean", "description": "是否开启自动驾驶", "default": True},
+                            "reference_id": {"type": "integer", "description": "参照物actor ID，None则使用地图spawn point", "default": None},
+                            "relative_distance": {"type": "number", "description": "相对参照物的距离（米）", "default": 10.0},
+                            "relative_angle": {"type": "number", "description": "相对参照物的角度（度，0=正前方）", "default": 0.0},
+                            "initial_speed": {"type": "number", "description": "初始速度（m/s）", "default": 0.0}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "scenario_highway_ramp",
+                    "description": "高速-进出匝道场景：在高速公路主路与匝道的汇流/分流点自动布设车辆并开启自动驾驶。推荐地图Town04/Town06。当用户提到'匝道'、'高速进出匝道'、'汇入匝道'、'驶出匝道'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "ramp_type": {"type": "string", "enum": ["on", "off"], "description": "on=匝道汇入(默认), off=主路驶出匝道", "default": "on"},
+                            "vehicle_count": {"type": "integer", "description": "总车辆数（主路+匝道），默认4", "default": 4},
+                            "map_name": {"type": "string", "description": "可选，指定加载的地图名如Town04", "default": None}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "scenario_lane_merge",
+                    "description": "城市-车道合并场景：自动寻找车道消失（车道数减少）位置，在消失车道与延续车道布设车辆演示汇流。当用户提到'车道合并'、'车道减少'、'汇流'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "vehicle_count": {"type": "integer", "description": "总车辆数，默认4", "default": 4},
+                            "map_name": {"type": "string", "description": "可选，指定加载的地图名", "default": None}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "scenario_diverge_merge",
+                    "description": "城市-分合流路口场景：找到多臂路口，在各进口臂布设车辆，经路口分流/合流。当用户提到'分合流路口'、'分流'、'路口合流'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "vehicle_count": {"type": "integer", "description": "总车辆数，默认4", "default": 4},
+                            "map_name": {"type": "string", "description": "可选，指定加载的地图名", "default": None}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "scenario_side_road",
+                    "description": "城市-辅路场景：自动寻找与主路平行的辅路，在主路和辅路上同时布设车辆。当用户提到'辅路'、'辅道'、'侧路'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "vehicle_count": {"type": "integer", "description": "总车辆数，默认4", "default": 4},
+                            "map_name": {"type": "string", "description": "可选，指定加载的地图名", "default": None}
+                        },
+                        "required": []
+                    }
+                }
             }
         ] 
 

@@ -9,6 +9,7 @@ import socket
 import sys
 import json
 import re
+import asyncio
 from pathlib import Path
 from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse
@@ -274,14 +275,18 @@ class CarlaClient:
         app_logger.info(f"✅ 共生成 {len(spawned_vehicles)} 辆车，ID列表: {[v.id for v in spawned_vehicles]}")
         return spawned_vehicles
 
-    async def spawn_bicycles(self, bicycle_type='crossbike', count=1):
+    async def spawn_bicycles(self, bicycle_type='crossbike', count=1,
+                             reference_id=None, relative_distance=10.0, relative_angle=0.0):
         count = int(count)  # ← 新增
         """生成多辆自行车，返回详细ID列表
-        
+
         支持的自行车类型:
         - crossbike: BH Crossbike
         - century: Diamondback Century
         - omafiets: Gazelle Omafiets
+
+        指定 reference_id 时，第一辆自行车生成在该 actor 的相对位置
+        （relative_distance 米、relative_angle 度，0=正前方），其余按地图生成点。
         """
         if self.world is None:
             app_logger.error("❌ 未连接到CARLA服务器")
@@ -302,7 +307,28 @@ class CarlaClient:
         
         blueprint_library = self.world.get_blueprint_library()
         spawned_bicycles = []
-        
+
+        # 参照物定位：指定 reference_id 时优先在该 actor 相对位置生成第一辆
+        anchor_loc = self._resolve_anchor_location(reference_id, relative_distance, relative_angle)
+        if anchor_loc is not None:
+            try:
+                anchor_bp = blueprint_library.find(blueprint_path)
+                if anchor_bp is None:
+                    anchor_bp = blueprint_library.find('vehicle.bh.crossbike')
+                wp = self.world.get_map().get_waypoint(
+                    anchor_loc, project_to_road=True, lane_type=carla.LaneType.Driving)
+                spawn_tf = self._lifted_transform(wp.transform) if wp else self._lifted_transform(
+                    carla.Transform(anchor_loc, carla.Rotation()))
+                bicycle = self.world.try_spawn_actor(anchor_bp, spawn_tf)
+                if bicycle:
+                    self.actors.append(bicycle)
+                    spawned_bicycles.append(bicycle)
+                    app_logger.info(f"🚲 [参照物定位] ID={bicycle.id} | 参照物={reference_id} 距离{relative_distance}m 角度{relative_angle}°")
+                else:
+                    app_logger.warning(f"⚠️ 参照物定位位置被占用，回退地图生成点")
+            except Exception as e:
+                app_logger.warning(f"⚠️ 参照物定位生成失败，回退地图生成点: {e}")
+
         for i, transform in enumerate(valid_points):
             if len(spawned_bicycles) >= count:
                 break
@@ -349,14 +375,18 @@ class CarlaClient:
         app_logger.info(f"✅ 共生成 {len(spawned_bicycles)} 辆自行车，ID列表: {[b.id for b in spawned_bicycles]}")
         return spawned_bicycles     
 
-    async def spawn_motorcycles(self, motorcycle_type='ninja', count=1):
+    async def spawn_motorcycles(self, motorcycle_type='ninja', count=1,
+                                reference_id=None, relative_distance=10.0, relative_angle=0.0):
         count = int(count)  # ← 新增
         """生成多辆摩托车，返回详细ID列表
-        
+
         支持的摩托车类型:
         - ninja: Kawasaki Ninja
         - yzf: Yamaha YZF
         - low_rider: Harley-Davidson Low Rider
+
+        指定 reference_id 时，第一辆摩托车生成在该 actor 的相对位置
+        （relative_distance 米、relative_angle 度，0=正前方），其余按地图生成点。
         """
         if self.world is None:
             app_logger.error("❌ 未连接到CARLA服务器")
@@ -377,7 +407,28 @@ class CarlaClient:
         
         blueprint_library = self.world.get_blueprint_library()
         spawned_motorcycles = []
-        
+
+        # 参照物定位：指定 reference_id 时优先在该 actor 相对位置生成第一辆
+        anchor_loc = self._resolve_anchor_location(reference_id, relative_distance, relative_angle)
+        if anchor_loc is not None:
+            try:
+                anchor_bp = blueprint_library.find(blueprint_path)
+                if anchor_bp is None:
+                    anchor_bp = blueprint_library.find('vehicle.kawasaki.ninja')
+                wp = self.world.get_map().get_waypoint(
+                    anchor_loc, project_to_road=True, lane_type=carla.LaneType.Driving)
+                spawn_tf = self._lifted_transform(wp.transform) if wp else self._lifted_transform(
+                    carla.Transform(anchor_loc, carla.Rotation()))
+                motorcycle = self.world.try_spawn_actor(anchor_bp, spawn_tf)
+                if motorcycle:
+                    self.actors.append(motorcycle)
+                    spawned_motorcycles.append(motorcycle)
+                    app_logger.info(f"🏍️ [参照物定位] ID={motorcycle.id} | 参照物={reference_id} 距离{relative_distance}m 角度{relative_angle}°")
+                else:
+                    app_logger.warning(f"⚠️ 参照物定位位置被占用，回退地图生成点")
+            except Exception as e:
+                app_logger.warning(f"⚠️ 参照物定位生成失败，回退地图生成点: {e}")
+
         for i, transform in enumerate(valid_points):
             if len(spawned_motorcycles) >= count:
                 break
@@ -516,10 +567,22 @@ class CarlaClient:
             
             # 收集所有可能的生成位置
             spawn_locations = []
-            
-            # 1. 使用传入的位置
+
+            # 1. 使用传入的位置：投影到最近车道并带少量扰动重试，提高落位率
             if location:
-                spawn_locations.append(location)
+                try:
+                    wp = self.world.get_map().get_waypoint(
+                        location, project_to_road=True, lane_type=carla.LaneType.Driving)
+                    base_loc = wp.transform.location if wp else location
+                except Exception:
+                    base_loc = location
+                # 实测：紧贴路面(z+0~0.5)时翻转车辆的包围盒易与路面碰撞导致spawn失败，
+                # z+1.0 成功率最高；先低后高各试一轮
+                for dz in (0.5, 1.0):
+                    for dx, dy in [(0.0, 0.0), (2.0, 0.0), (-2.0, 0.0), (0.0, 2.0), (0.0, -2.0),
+                                   (4.0, 0.0), (-4.0, 0.0), (0.0, 4.0), (0.0, -4.0)]:
+                        spawn_locations.append(carla.Location(
+                            x=base_loc.x + dx, y=base_loc.y + dy, z=base_loc.z + dz))
             
             # 2. 使用地图车辆生成点
             map_spawn_points = self.world.get_map().get_spawn_points()
@@ -564,11 +627,14 @@ class CarlaClient:
                     # 方案B：正常 spawn 后翻转
                     normal_transform = carla.Transform(spawn_loc, carla.Rotation())
                     vehicle = self.world.try_spawn_actor(blueprint, normal_transform)
-                    
+
                     if vehicle:
                         vehicle.set_simulate_physics(False)
-                        final_loc = vehicle.get_location()
-                        vehicle.set_transform(carla.Transform(final_loc, overturned_rotation))
+                        # 注意：同步模式下 spawn 后立即 get_location() 会返回 (0,0,0)，
+                        # 直接用已知的 spawn_loc 定位，避免被传送到原点
+                        vehicle.set_transform(carla.Transform(
+                            carla.Location(spawn_loc.x, spawn_loc.y, spawn_loc.z),
+                            overturned_rotation))
                         self.actors.append(vehicle)
                         app_logger.info(f"🚗💥 仰翻车辆生成成功(翻转): {vehicle_type} (ID: {vehicle.id}, 尝试{idx+1}次)")
                         return vehicle
@@ -1229,7 +1295,7 @@ class CarlaClient:
             if blueprint.has_attribute("color"):
                 blueprint.set_attribute("color", f"{random.randint(0,255)},{random.randint(0,255)},{random.randint(0,255)}")
             try:
-                actor = self.world.try_spawn_actor(blueprint, wp.transform)
+                actor = self.world.try_spawn_actor(blueprint, self._lifted_transform(wp.transform))
             except Exception as e:
                 app_logger.warning(f"⚠️ [场景{tag}] 生成异常: {e}")
                 continue
@@ -1250,6 +1316,42 @@ class CarlaClient:
                 carla.Rotation(pitch=-90.0)))
         except Exception as e:
             app_logger.warning(f"⚠️ 设置俯视视角失败: {e}")
+
+    def _resolve_anchor_location(self, reference_id=None, relative_distance=None, relative_angle=0.0):
+        """把"参照物actor ID + 相对距离 + 相对角度"解析成世界坐标 Location。
+        角度以参照物朝向为0度、左偏为正（与spawn_vehicle_param一致）；参照物不存在返回 None。"""
+        if reference_id is None:
+            return None
+        try:
+            ref = self.world.get_actor(int(reference_id))
+        except Exception:
+            ref = None
+        if ref is None or not ref.is_alive:
+            return None
+        t = ref.get_transform()
+        yaw = math.radians(t.rotation.yaw + float(relative_angle or 0.0))
+        d = float(relative_distance) if relative_distance is not None else 10.0
+        return carla.Location(x=t.location.x + d * math.cos(yaw),
+                              y=t.location.y + d * math.sin(yaw),
+                              z=t.location.z)
+
+    @staticmethod
+    def _nearest_by_distance(candidates, loc, key):
+        """返回候选中离 loc 最近的元素；key 负责从候选提取 Location。空列表返回 None。"""
+        best, best_d = None, float('inf')
+        for c in candidates:
+            d = key(c).distance(loc)
+            if d < best_d:
+                best, best_d = c, d
+        return best
+
+    @staticmethod
+    def _lifted_transform(transform, dz=0.3):
+        """抬高spawn点z坐标。实测CARLA在异步模式下要求spawn位置略高于路面，
+        紧贴车道中心z的spawn会被全部拒绝（try_spawn_actor返回None）；
+        有物理的actor落地后自然沉降，不影响最终位置。"""
+        loc = transform.location
+        return carla.Transform(carla.Location(loc.x, loc.y, loc.z + dz), transform.rotation)
 
     async def _ensure_map(self, map_name):
         """切换到指定地图（仅在本进程尚未使用过Traffic Manager时安全）。
@@ -1284,10 +1386,11 @@ class CarlaClient:
             app_logger.error(f"❌ [场景] 加载地图失败: {e}")
             return False
 
-    async def scenario_highway_ramp(self, ramp_type='on', vehicle_count=4, map_name=None):
+    async def scenario_highway_ramp(self, ramp_type='on', vehicle_count=4, map_name=None, anchor_loc=None):
         """高速-进出匝道场景。
         ramp_type='on': 匝道车辆汇入主路；'off': 主路车辆驶出匝道。
         自动寻找多车道高速主路与单车道匝道的连接点布设车辆。
+        anchor_loc 指定时优先选择离该位置最近的匝道结构。
         """
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
@@ -1317,14 +1420,21 @@ class CarlaClient:
         scene = None
         if ramp_type == 'on':
             # 从匝道入口前向跟随，能找到主路 → 汇入型匝道
+            scenes = []
             for wps in ramp_candidates:
                 reached = self._follow_lane_all(wps[0], step=10.0, max_hops=30)
                 main_hits = [rid for rid in reached if rid in main_road_ids]
                 if main_hits:
-                    scene = {"ramp_wps": wps, "point": reached[main_hits[0]], "reached": reached}
-                    break
+                    scenes.append({"ramp_wps": wps, "point": reached[main_hits[0]], "reached": reached})
+            if scenes:
+                if anchor_loc is not None:
+                    scene = self._nearest_by_distance(
+                        scenes, anchor_loc, lambda sc: sc["point"].transform.location)
+                else:
+                    scene = scenes[0]
         else:
             # 从主路各车道前向跟随（多分支），能找到匝道 → 驶出型匝道
+            scenes = []
             for (road_id, section_id), wps in groups.items():
                 if road_id not in main_road_ids:
                     continue
@@ -1336,10 +1446,13 @@ class CarlaClient:
                     if ramp_hits:
                         ramp_first = reached[ramp_hits[0]]
                         ramp_wps = next(c for c in ramp_candidates if c[0].road_id == ramp_hits[0])
-                        scene = {"ramp_wps": ramp_wps, "point": wp, "fork_wp": ramp_first}
-                        break
-                if scene:
-                    break
+                        scenes.append({"ramp_wps": ramp_wps, "point": wp, "fork_wp": ramp_first})
+            if scenes:
+                if anchor_loc is not None:
+                    scene = self._nearest_by_distance(
+                        scenes, anchor_loc, lambda sc: sc["point"].transform.location)
+                else:
+                    scene = scenes[0]
 
         if not scene:
             return {"success": False,
@@ -1384,9 +1497,10 @@ class CarlaClient:
             "details": desc
         }
 
-    async def scenario_lane_merge(self, vehicle_count=4, map_name=None):
+    async def scenario_lane_merge(self, vehicle_count=4, map_name=None, anchor_loc=None):
         """城市-车道合并场景：找到车道数减少（车道消失）的位置，
-        在消失车道与延续车道上布设车辆，演示汇流。"""
+        在消失车道与延续车道上布设车辆，演示汇流。
+        anchor_loc 指定时优先选择离该位置最近的车道消失点。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         if not await self._ensure_map(map_name):
@@ -1401,6 +1515,7 @@ class CarlaClient:
         drop_point = None
         drop_lane_id = None
         cont_lane_wp = None
+        drop_candidates = []  # [(drop_point, drop_lane_id, cont_lane_wp)]
         for (road_id, section_id), wps in groups.items():
             if len({w.lane_id for w in wps}) < 2:
                 continue
@@ -1420,13 +1535,17 @@ class CarlaClient:
                 # 存在另一条能走到接近路段末尾的车道 → 确认车道消失
                 for other_id, other_term in terminals.items():
                     if other_id != lane_id and other_term.s >= road_max_s - 8.0:
-                        drop_point, drop_lane_id = term, lane_id
-                        cont_lane_wp = min(by_lane[other_id], key=lambda w: abs(w.s - term.s))
+                        drop_candidates.append(
+                            (term, lane_id,
+                             min(by_lane[other_id], key=lambda w: abs(w.s - term.s))))
                         break
-                if drop_point:
-                    break
-            if drop_point:
-                break
+
+        if drop_candidates:
+            if anchor_loc is not None:
+                drop_point, drop_lane_id, cont_lane_wp = self._nearest_by_distance(
+                    drop_candidates, anchor_loc, lambda c: c[0].transform.location)
+            else:
+                drop_point, drop_lane_id, cont_lane_wp = drop_candidates[0]
 
         if not drop_point:
             return {"success": False,
@@ -1468,9 +1587,10 @@ class CarlaClient:
             "details": desc
         }
 
-    async def scenario_diverge_merge(self, vehicle_count=4, map_name=None):
+    async def scenario_diverge_merge(self, vehicle_count=4, map_name=None, anchor_loc=None):
         """城市-分合流路口场景：找到有多个进出口臂的路口，
-        在各进口臂布设车辆，经路口分流后从不同出口驶出/合流。"""
+        在各进口臂布设车辆，经路口分流后从不同出口驶出/合流。
+        anchor_loc 指定时优先选择离该位置最近的路口。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         if not await self._ensure_map(map_name):
@@ -1486,6 +1606,7 @@ class CarlaClient:
         # 找一个 >=3 臂的路口
         junction = None
         arms = []
+        junction_candidates = []
         visited_junctions = set()
         for w in waypoints:
             if not w.is_junction:
@@ -1502,8 +1623,13 @@ class CarlaClient:
             for entry_wp, exit_wp in pairs:
                 entries.setdefault(entry_wp.road_id, entry_wp)
             if len(entries) >= 3:
-                junction, arms = j, list(entries.values())
-                break
+                junction_candidates.append((j, list(entries.values())))
+        if junction_candidates:
+            if anchor_loc is not None:
+                junction, arms = self._nearest_by_distance(
+                    junction_candidates, anchor_loc, lambda c: c[0].bounding_box.location)
+            else:
+                junction, arms = junction_candidates[0]
         if not junction:
             junction = junction_wp.get_junction()
             pairs = junction.get_waypoints(carla.LaneType.Driving)
@@ -1538,9 +1664,10 @@ class CarlaClient:
             "details": desc
         }
 
-    async def scenario_side_road(self, vehicle_count=4, map_name=None):
+    async def scenario_side_road(self, vehicle_count=4, map_name=None, anchor_loc=None):
         """城市-辅路场景：找到与主路平行且近距离的道路（辅路），
-        在主路和辅路上同时布设车辆。"""
+        在主路和辅路上同时布设车辆。
+        anchor_loc 指定时优先选择离该位置最近的平行道路对。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         if not await self._ensure_map(map_name):
@@ -1550,7 +1677,7 @@ class CarlaClient:
         waypoints = self._get_driving_waypoints(6.0)
 
         # 找一对平行且间距 8~45m 的不同道路
-        pair = None
+        pair_candidates = []
         stride = max(1, len(waypoints) // 120)
         for w1 in waypoints[::stride]:
             if self._road_length(self._group_waypoints_by_road(waypoints).get((w1.road_id, w1.section_id), [])) < 60.0:
@@ -1570,8 +1697,15 @@ class CarlaClient:
                 if diff < 25.0:
                     best, best_d = w2, d
             if best:
-                pair = (w1, best, best_d)
-                break
+                pair_candidates.append((w1, best, best_d))
+
+        pair = None
+        if pair_candidates:
+            if anchor_loc is not None:
+                pair = self._nearest_by_distance(
+                    pair_candidates, anchor_loc, lambda p: p[0].transform.location)
+            else:
+                pair = pair_candidates[0]
 
         if not pair:
             return {"success": False,
@@ -1648,8 +1782,8 @@ class CarlaClient:
                                "center": j.bounding_box.location, "arm_count": len(entries)})
         return result
 
-    async def scenario_junction_light(self, junction_shape='any', vehicle_count=4, map_name=None):
-        """城市-路口（十字、T型、Y型）及红绿灯场景"""
+    async def scenario_junction_light(self, junction_shape='any', vehicle_count=4, map_name=None, anchor_loc=None):
+        """城市-路口（十字、T型、Y型）及红绿灯场景。anchor_loc 指定时优先选择离该位置最近的路口。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         if not await self._ensure_map(map_name):
@@ -1658,6 +1792,8 @@ class CarlaClient:
         current_map = self.world.get_map().name.split('/')[-1]
         lights = list(self.world.get_actors().filter("traffic.traffic_light*"))
         junctions = self._find_junctions_with_arms(3)
+        if anchor_loc is not None:
+            junctions.sort(key=lambda i: i["center"].distance(anchor_loc))
 
         def _shape_of(arm_count):
             if arm_count >= 4:
@@ -1726,11 +1862,12 @@ class CarlaClient:
             "details": desc
         }
 
-    async def scenario_tunnel(self, vehicle_count=4, map_name=None):
+    async def scenario_tunnel(self, vehicle_count=4, map_name=None, anchor_loc=None):
         """隧道场景：寻找上方被桥梁/建筑覆盖的下穿道路（隧道/地下道/桥下通道）
 
         判定：车道点水平半径8m内存在高出4m以上的其他车道 → 该点被覆盖。
         已安装的地图均无地质下沉道路（扫描验证），下穿通道是唯一可行的真隧道结构。
+        anchor_loc 指定时优先选择离该位置最近的下穿道路。
         """
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
@@ -1772,6 +1909,13 @@ class CarlaClient:
             return {"success": False,
                     "error": f"当前地图 {current_map} 未检测到隧道/下穿通道，建议用 Town04（有立交桥）启动CARLA"}
         tunnel_roads.sort(key=len, reverse=True)
+        if anchor_loc is not None:
+            nearest = self._nearest_by_distance(
+                tunnel_roads, anchor_loc,
+                lambda wps: wps[len(wps) // 2].transform.location)
+            if nearest is not None:
+                tunnel_roads.remove(nearest)
+                tunnel_roads.insert(0, nearest)
         wps = tunnel_roads[0]
         cover_z = max(loc_z for loc_z in
                       [max(grid.get((int(wps[len(wps)//2].transform.location.x // CELL) + dx,
@@ -1808,8 +1952,9 @@ class CarlaClient:
             "details": desc
         }
 
-    async def scenario_roundabout(self, vehicle_count=5, map_name=None):
-        """环岛场景：寻找车辆绕一圈能回到该路口的环形路口"""
+    async def scenario_roundabout(self, vehicle_count=5, map_name=None, anchor_loc=None):
+        """环岛场景：寻找车辆绕一圈能回到该路口的环形路口。
+        anchor_loc 指定时优先选择离该位置最近的环岛。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         if not await self._ensure_map(map_name):
@@ -1818,6 +1963,7 @@ class CarlaClient:
         current_map = self.world.get_map().name.split('/')[-1]
         junctions = self._find_junctions_with_arms(3)
         picked = None
+        candidates = []
         for info in junctions:
             if info["arm_count"] > 6:
                 continue
@@ -1825,8 +1971,12 @@ class CarlaClient:
             reached = self._follow_lane_all(info["arms"][0], step=10.0, max_hops=35)
             # 从一条臂出发能到达另外>=2条臂 → 绕圈回环 = 环岛
             if len([r for r in reached if r in arm_road_ids]) >= 3:
-                picked = info
-                break
+                candidates.append(info)
+        if candidates:
+            if anchor_loc is not None:
+                picked = self._nearest_by_distance(candidates, anchor_loc, lambda i: i["center"])
+            else:
+                picked = candidates[0]
         if not picked:
             return {"success": False,
                     "error": f"当前地图 {current_map} 未找到环岛，建议用 Town05 启动CARLA"}
@@ -1911,16 +2061,17 @@ class CarlaClient:
                     desc.append(f"行走 ID={walker.id} ({bp.id})")
             elif pose == 'crouch':
                 walker.set_simulate_physics(False)
-                t = walker.get_transform()
-                t.location.z -= 0.35
-                t.rotation.pitch = 15
+                # 同步模式下 spawn 后立即 get_transform() 可能返回 (0,0,0)，用已知 spawn 点 loc
+                t = carla.Transform(
+                    carla.Location(loc.x, loc.y, loc.z - 0.35),
+                    carla.Rotation(pitch=15))
                 walker.set_transform(t)
                 desc.append(f"蹲下(硬摆) ID={walker.id} ({bp.id})")
             elif pose == 'lie':
                 walker.set_simulate_physics(False)
-                t = walker.get_transform()
-                t.location.z -= 0.55
-                t.rotation.roll = 90
+                t = carla.Transform(
+                    carla.Location(loc.x, loc.y, loc.z - 0.55),
+                    carla.Rotation(roll=90))
                 walker.set_transform(t)
                 desc.append(f"躺下(硬摆) ID={walker.id} ({bp.id})")
             elif pose == 'umbrella':
@@ -1941,8 +2092,8 @@ class CarlaClient:
             "details": desc
         }
 
-    async def scenario_two_wheeler(self, vehicle_type='bicycle', state='stand', count=2):
-        """自行车/摩托车-站立、行进、倒地场景"""
+    async def scenario_two_wheeler(self, vehicle_type='bicycle', state='stand', count=2, anchor_loc=None):
+        """自行车/摩托车-站立、行进、倒地场景。anchor_loc 指定时优先在其附近生成。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         current_map = self.world.get_map().name.split('/')[-1]
@@ -1955,7 +2106,10 @@ class CarlaClient:
         blueprints = [b for b in blueprints if b]
 
         waypoints = self._get_driving_waypoints(6.0)
-        random.shuffle(waypoints)
+        if anchor_loc is not None:
+            waypoints.sort(key=lambda w: w.transform.location.distance(anchor_loc))
+        else:
+            random.shuffle(waypoints)
         spawned = []
         desc = []
         for i in range(int(count)):
@@ -1966,7 +2120,7 @@ class CarlaClient:
                        for a in self.world.get_actors().filter("vehicle.*")):
                     continue
                 try:
-                    actor = self.world.try_spawn_actor(bp, wp.transform)
+                    actor = self.world.try_spawn_actor(bp, self._lifted_transform(wp.transform))
                 except Exception:
                     actor = None
                 if actor:
@@ -1981,8 +2135,10 @@ class CarlaClient:
                 desc.append(f"行进 ID={actor.id} ({bp.id})")
             elif state == 'fallen':
                 actor.set_simulate_physics(False)
-                t = actor.get_transform()
-                t.rotation.roll = random.choice([75, -75])
+                # 同步模式下 spawn 后立即 get_transform() 可能返回 (0,0,0)，用已知 waypoint 位姿
+                t = carla.Transform(wp.transform.location, carla.Rotation(
+                    pitch=wp.transform.rotation.pitch, yaw=wp.transform.rotation.yaw,
+                    roll=random.choice([75, -75])))
                 actor.set_transform(t)
                 desc.append(f"倒地 ID={actor.id} ({bp.id})")
             else:
@@ -1995,8 +2151,8 @@ class CarlaClient:
             "details": desc
         }
 
-    async def spawn_special_vehicle(self, vehicle_type='ambulance', moving=True, count=1):
-        """特殊任务车辆：救护车/警车（自动配送物流车无蓝图，无法完成）"""
+    async def spawn_special_vehicle(self, vehicle_type='ambulance', moving=True, count=1, anchor_loc=None):
+        """特殊任务车辆：救护车/警车（自动配送物流车无蓝图，无法完成）。anchor_loc 指定时优先在其附近生成。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         blueprint_library = self.world.get_blueprint_library()
@@ -2017,7 +2173,10 @@ class CarlaClient:
 
         spawned = []
         waypoints = self._get_driving_waypoints(8.0)
-        random.shuffle(waypoints)
+        if anchor_loc is not None:
+            waypoints.sort(key=lambda w: w.transform.location.distance(anchor_loc))
+        else:
+            random.shuffle(waypoints)
         for i in range(int(count)):
             actor = None
             for wp in waypoints[:30]:
@@ -2025,7 +2184,7 @@ class CarlaClient:
                        for a in self.world.get_actors().filter("vehicle.*")):
                     continue
                 try:
-                    actor = self.world.try_spawn_actor(blueprint, wp.transform)
+                    actor = self.world.try_spawn_actor(blueprint, self._lifted_transform(wp.transform))
                 except Exception:
                     actor = None
                 if actor:
@@ -2076,8 +2235,9 @@ class CarlaClient:
         self.scenario_tasks.append(task)
         return task
 
-    async def scenario_officer(self, element='traffic_police', with_companion=False):
-        """特殊群体场景：交警/轮椅（婴儿车无蓝图，返回无法完成说明）"""
+    async def scenario_officer(self, element='traffic_police', with_companion=False, anchor_loc=None):
+        """特殊群体场景：交警/轮椅（婴儿车无蓝图，返回无法完成说明）。
+        anchor_loc 指定时交警/轮椅优先生成在该位置附近。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         blueprint_library = self.world.get_blueprint_library()
@@ -2098,10 +2258,25 @@ class CarlaClient:
                     break
             if not bp:
                 return {"success": False, "error": "找不到可用的轮椅行人蓝图"}
-            # 多次尝试随机导航点（单次落位失败不直接放弃）
+            # 锚点优先：指定位置直接尝试生成，失败再回退随机导航点
             walker = None
             loc = None
+            if anchor_loc is not None:
+                try:
+                    sidewalk_wp = self.world.get_map().get_waypoint(
+                        anchor_loc, project_to_road=True, lane_type=carla.LaneType.Sidewalk)
+                    try_loc = sidewalk_wp.transform.location if sidewalk_wp else anchor_loc
+                    walker = self.world.try_spawn_actor(bp, carla.Transform(
+                        carla.Location(try_loc.x, try_loc.y, try_loc.z + 0.3)))
+                    if walker:
+                        loc = try_loc
+                        app_logger.info(f"♿ [锚点定位] 轮椅行人生成在 ({try_loc.x:.1f}, {try_loc.y:.1f})")
+                except Exception as e:
+                    app_logger.warning(f"⚠️ 轮椅锚点定位失败，回退随机点: {e}")
+                    walker = None
             for _attempt in range(10):
+                if walker:
+                    break
                 loc = self.world.get_random_location_from_navigation()
                 if not loc:
                     continue
@@ -2127,11 +2302,13 @@ class CarlaClient:
             return {"success": False, "error": "找不到交警蓝图 walker.pedestrian.0030/0032"}
         waypoints = self._get_driving_waypoints(8.0)
         candidates = [w for w in waypoints if not w.is_junction] or waypoints
+        if anchor_loc is not None:
+            candidates.sort(key=lambda w: w.transform.location.distance(anchor_loc))
         # 多次尝试不同道路点，单次被占用不直接失败
         walker = None
         road_wp = None
-        for wp in random.sample(candidates, min(10, len(candidates))):
-            walker = self.world.try_spawn_actor(bp, wp.transform)
+        for wp in candidates[:10]:
+            walker = self.world.try_spawn_actor(bp, self._lifted_transform(wp.transform))
             if walker:
                 road_wp = wp
                 break
@@ -2222,8 +2399,9 @@ class CarlaClient:
         return {"success": True, "scenario": f"弱光-{names[condition]}",
                 "details": [f"太阳高度角={presets[condition].sun_altitude_angle}° 云量={presets[condition].cloudiness}%"]}
 
-    async def scenario_backlight(self, map_name=None):
-        """逆光场景：低角度太阳正对来车方向 + 对向车辆开大灯"""
+    async def scenario_backlight(self, map_name=None, anchor_loc=None):
+        """逆光场景：低角度太阳正对来车方向 + 对向车辆开大灯。
+        anchor_loc 指定时优先选择离该位置最近的长直道路。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         if not await self._ensure_map(map_name):
@@ -2235,7 +2413,10 @@ class CarlaClient:
             self._group_waypoints_by_road(waypoints).get((w.road_id, w.section_id), [w])) > 80.0]
         if not straight:
             return {"success": False, "error": "未找到适合演示的长直道路"}
-        wp = random.choice(straight)
+        if anchor_loc is not None:
+            wp = self._nearest_by_distance(straight, anchor_loc, lambda w: w.transform.location)
+        else:
+            wp = random.choice(straight)
         yaw = wp.transform.rotation.yaw
 
         # 太阳压低到正对道路方向（逆光）
@@ -2257,7 +2438,7 @@ class CarlaClient:
             opp_wp = None
         oncoming = None
         if opp_wp and opp_wp.lane_type == carla.LaneType.Driving:
-            t = opp_wp.transform
+            t = self._lifted_transform(opp_wp.transform)
             t.rotation.yaw = (t.rotation.yaw + 180) % 360
             try:
                 oncoming = self.world.try_spawn_actor(
@@ -2293,8 +2474,8 @@ class CarlaClient:
                        (["对向车已开大灯"] if oncoming else ["无对向车道，仅低角度太阳"])
         }
 
-    async def spawn_rollover_vehicle(self, vehicle_type='car', rollover='side', map_name=None):
-        """侧翻/仰翻车辆（汽车、货车近似）"""
+    async def spawn_rollover_vehicle(self, vehicle_type='car', rollover='side', map_name=None, anchor_loc=None):
+        """侧翻/仰翻车辆（汽车、货车近似）。anchor_loc 指定时优先在其附近生成。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         if not await self._ensure_map(map_name):
@@ -2319,6 +2500,8 @@ class CarlaClient:
 
         spawn_points = self.world.get_map().get_spawn_points()
         random.shuffle(spawn_points)
+        if anchor_loc is not None:
+            spawn_points.sort(key=lambda sp: sp.location.distance(anchor_loc))
         roll = 180 if rollover == 'upside' else random.choice([85, -85])
         vehicle = None
         for sp in spawn_points[:25]:
@@ -2337,9 +2520,11 @@ class CarlaClient:
                 vehicle = None
             if vehicle:
                 vehicle.set_simulate_physics(False)
-                t = vehicle.get_transform()
-                t.rotation.roll = roll
-                vehicle.set_transform(t)
+                # 同步模式下 spawn 后立即 get_transform() 可能返回 (0,0,0)，
+                # 用已知的 spawn 点位置 + 目标翻转角重建 transform
+                vehicle.set_transform(carla.Transform(
+                    carla.Location(loc.x, loc.y, loc.z),
+                    carla.Rotation(pitch=0, yaw=random.uniform(0, 360), roll=roll)))
                 break
         if not vehicle:
             return {"success": False, "error": "翻倒车生成失败（未找到空位）"}
@@ -2355,8 +2540,9 @@ class CarlaClient:
             "note": note
         }
 
-    async def scenario_lead_vehicle(self, mode='stationary', distance=25.0, map_name=None):
-        """前车急刹/静止场景：同车道前车 + 后车自动驾驶"""
+    async def scenario_lead_vehicle(self, mode='stationary', distance=25.0, map_name=None, anchor_loc=None):
+        """前车急刹/静止场景：同车道前车 + 后车自动驾驶。
+        anchor_loc 指定时优先选择离该位置最近的长直车道。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         if not await self._ensure_map(map_name):
@@ -2366,10 +2552,13 @@ class CarlaClient:
         waypoints = self._get_driving_waypoints(6.0)
         straight = [w for w in waypoints if not w.is_junction]
         wp = None
-        for cand in random.sample(straight, min(30, len(straight))):
-            if cand.previous(distance) and cand.previous(distance + 10.0):
-                wp = cand
-                break
+        eligible = [cand for cand in straight
+                    if cand.previous(distance) and cand.previous(distance + 10.0)]
+        if eligible:
+            if anchor_loc is not None:
+                wp = self._nearest_by_distance(eligible, anchor_loc, lambda w: w.transform.location)
+            else:
+                wp = random.sample(eligible, min(1, len(eligible)))[0]
         if not wp:
             return {"success": False, "error": "未找到适合的长直车道"}
 
@@ -2402,8 +2591,9 @@ class CarlaClient:
                        (["4秒后急刹4秒"] if mode == 'brake' else [])
         }
 
-    async def scenario_cut_in(self, direction='left', map_name=None):
-        """危险切入场景：邻道车突然变道到本车前方"""
+    async def scenario_cut_in(self, direction='left', map_name=None, anchor_loc=None):
+        """危险切入场景：邻道车突然变道到本车前方。
+        anchor_loc 指定时优先选择离该位置最近的多车道道路。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         if not await self._ensure_map(map_name):
@@ -2417,10 +2607,19 @@ class CarlaClient:
                  if len({w.lane_id for w in v}) >= 2 and self._road_length(v) > 60.0 and not v[0].is_junction]
         if not multi:
             return {"success": False, "error": "未找到多车道直路"}
-        key = random.choice(multi)
+        if anchor_loc is not None:
+            key = min(multi, key=lambda k: self._nearest_by_distance(
+                groups[k], anchor_loc, lambda w: w.transform.location)
+                .transform.location.distance(anchor_loc))
+        else:
+            key = random.choice(multi)
         wps = sorted(groups[key], key=lambda w: w.s)
         lane_ids = sorted({w.lane_id for w in wps})
-        ego_wp = random.choice([w for w in wps if w.lane_id == lane_ids[0]])
+        if anchor_loc is not None:
+            ego_wp = min([w for w in wps if w.lane_id == lane_ids[0]],
+                         key=lambda w: w.transform.location.distance(anchor_loc))
+        else:
+            ego_wp = random.choice([w for w in wps if w.lane_id == lane_ids[0]])
         # 相邻车道（左侧优先）
         adj_wp = None
         try:
@@ -2471,8 +2670,9 @@ class CarlaClient:
     # ============================================================
     # 第4周场景任务: 前车消失/危险横穿/低重叠/逆行/无保护转弯
     # ============================================================
-    async def scenario_lead_disappear(self, map_name=None):
-        """前车消失场景：前车切入邻道，露出前方静止障碍物"""
+    async def scenario_lead_disappear(self, map_name=None, anchor_loc=None):
+        """前车消失场景：前车切入邻道，露出前方静止障碍物。
+        anchor_loc 指定时优先选择离该位置最近的长直车道。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         if not await self._ensure_map(map_name):
@@ -2481,21 +2681,19 @@ class CarlaClient:
         current_map = self.world.get_map().name.split('/')[-1]
         waypoints = self._get_driving_waypoints(6.0)
         straight = [w for w in waypoints if not w.is_junction]
-        wp = None
-        for cand in random.sample(straight, min(30, len(straight))):
-            if cand.previous(35.0) and cand.previous(50.0):
-                wp = cand
-                break
-        if not wp:
+        eligible = [cand for cand in straight
+                    if cand.previous(35.0) and cand.previous(50.0)]
+        if not eligible:
             return {"success": False, "error": "未找到适合的长直车道"}
+        if anchor_loc is not None:
+            eligible.sort(key=lambda w: w.transform.location.distance(anchor_loc))
+        wp = eligible[0]
 
         # 尝试多个候选点，直到障碍与前车都成功落位
         obstacle = None
         lead = None
         wp_picked = None
-        for cand in random.sample(straight, min(15, len(straight))):
-            if not (cand.previous(35.0) and cand.previous(50.0)):
-                continue
+        for cand in eligible[:15]:
             obstacle = self._spawn_vehicle_on_waypoint(cand, autopilot=False, tag="障碍")
             if not obstacle:
                 continue
@@ -2534,8 +2732,9 @@ class CarlaClient:
             "details": [f"前方障碍 ID={obstacle.id}（静止）", f"前车 ID={lead.id}", "4秒后前车切出，露出障碍"]
         }
 
-    async def scenario_crossing_hazard(self, crosser='pedestrian', map_name=None):
-        """路口-危险横穿场景：人/机动车/二轮车横穿本车方向"""
+    async def scenario_crossing_hazard(self, crosser='pedestrian', map_name=None, anchor_loc=None):
+        """路口-危险横穿场景：人/机动车/二轮车横穿本车方向。
+        anchor_loc 指定时优先选择离该位置最近的路口。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         if not await self._ensure_map(map_name):
@@ -2545,6 +2744,8 @@ class CarlaClient:
         junctions = self._find_junctions_with_arms(3)
         if not junctions:
             return {"success": False, "error": "未找到路口"}
+        if anchor_loc is not None:
+            junctions.sort(key=lambda j: j["center"].distance(anchor_loc))
         picked = random.choice(junctions[:5])
         arms = picked["arms"]
         ego_arm = arms[0]
@@ -2619,8 +2820,9 @@ class CarlaClient:
             "details": desc
         }
 
-    async def scenario_low_overlap(self, offset_ratio=0.35, map_name=None):
-        """前方低重叠率行驶目标：目标车贴车道线行驶，部分侵入本车道"""
+    async def scenario_low_overlap(self, offset_ratio=0.35, map_name=None, anchor_loc=None):
+        """前方低重叠率行驶目标：目标车贴车道线行驶，部分侵入本车道。
+        anchor_loc 指定时优先选择离该位置最近的多车道道路。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         if not await self._ensure_map(map_name):
@@ -2633,10 +2835,19 @@ class CarlaClient:
                  if len({w.lane_id for w in v}) >= 2 and self._road_length(v) > 60.0 and not v[0].is_junction]
         if not multi:
             return {"success": False, "error": "未找到多车道直路"}
-        key = random.choice(multi)
+        if anchor_loc is not None:
+            key = min(multi, key=lambda k: self._nearest_by_distance(
+                groups[k], anchor_loc, lambda w: w.transform.location)
+                .transform.location.distance(anchor_loc))
+        else:
+            key = random.choice(multi)
         wps = sorted(groups[key], key=lambda w: w.s)
         lane_ids = sorted({w.lane_id for w in wps})
-        follower_wp = random.choice([w for w in wps if w.lane_id == lane_ids[0]])
+        if anchor_loc is not None:
+            follower_wp = min([w for w in wps if w.lane_id == lane_ids[0]],
+                              key=lambda w: w.transform.location.distance(anchor_loc))
+        else:
+            follower_wp = random.choice([w for w in wps if w.lane_id == lane_ids[0]])
         target_wp = None
         for w in wps:
             if w.lane_id == lane_ids[-1] and abs(w.s - follower_wp.s) < 10.0:
@@ -2708,8 +2919,9 @@ class CarlaClient:
                        ([f"本车 ID={follower.id} lane={follower_wp.lane_id}"] if follower else [])
         }
 
-    async def scenario_wrong_way(self, speed=8.0, map_name=None):
-        """逆行场景：对向车道出现逆行车辆"""
+    async def scenario_wrong_way(self, speed=8.0, map_name=None, anchor_loc=None):
+        """逆行场景：对向车道出现逆行车辆。
+        anchor_loc 指定时优先选择离该位置最近的双向道路。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         if not await self._ensure_map(map_name):
@@ -2724,7 +2936,12 @@ class CarlaClient:
                    and self._road_length(v) > 60.0 and not v[0].is_junction]
         if not two_way:
             return {"success": False, "error": "未找到双向道路"}
-        random.shuffle(two_way)
+        if anchor_loc is not None:
+            two_way.sort(key=lambda k: self._nearest_by_distance(
+                groups[k], anchor_loc, lambda w: w.transform.location)
+                .transform.location.distance(anchor_loc))
+        else:
+            random.shuffle(two_way)
         bps = [b for b in self.world.get_blueprint_library().filter("vehicle.*")
                if b.id.startswith("vehicle.")]
         ref = None
@@ -2746,7 +2963,7 @@ class CarlaClient:
             wrong_c = None
             for _bp in random.sample(bps, min(4, len(bps))):
                 try:
-                    wrong_c = self.world.try_spawn_actor(_bp, t_c)
+                    wrong_c = self.world.try_spawn_actor(_bp, self._lifted_transform(t_c))
                 except Exception:
                     wrong_c = None
                 if wrong_c:
@@ -2787,8 +3004,9 @@ class CarlaClient:
                        [f"逆行车辆 ID={wrong.id} lane={wrong_wp.lane_id}（朝车道反方向行驶）"]
         }
 
-    async def scenario_unprotected_turn(self, map_name=None):
-        """路口无保护通行场景：无信号灯路口多方向来车交汇"""
+    async def scenario_unprotected_turn(self, map_name=None, anchor_loc=None):
+        """路口无保护通行场景：无信号灯路口多方向来车交汇。
+        anchor_loc 指定时优先选择离该位置最近的无信号灯路口。"""
         if self.world is None:
             return {"success": False, "error": "未连接到CARLA服务器"}
         if not await self._ensure_map(map_name):
@@ -2797,6 +3015,8 @@ class CarlaClient:
         current_map = self.world.get_map().name.split('/')[-1]
         lights = list(self.world.get_actors().filter("traffic.traffic_light*"))
         junctions = self._find_junctions_with_arms(3)
+        if anchor_loc is not None:
+            junctions.sort(key=lambda i: i["center"].distance(anchor_loc))
         picked = None
         for info in junctions:
             if all(l.get_location().distance(info["center"]) > 45.0 for l in lights):
@@ -3624,10 +3844,13 @@ class CarlaClient:
         elif self.view_target:
             target_actor = self.view_target
         elif self.actors:
+            # 自动选取最近生成的可跟随对象（车辆/行人/道具均可跟随，
+            # 仅排除控制器与传感器）
             for actor in reversed(self.actors):
-                if 'vehicle' in actor.type_id or 'walker' in actor.type_id:
-                    target_actor = actor
-                    break
+                if 'controller' in actor.type_id or 'sensor' in actor.type_id:
+                    continue
+                target_actor = actor
+                break
 
         if target_actor:
             self.view_target = target_actor
@@ -3718,95 +3941,127 @@ async def spawn_vehicle_impl(query: str, count: int = 1, **kwargs) -> str:
             return f"✅ 已生成{len(vehicles)}辆{query}车辆，最后一辆车ID: {last_vehicle.id}"
     return "❌ 车辆生成失败，请确保CARLA服务器已连接且地图有可用生成点"
 
-async def spawn_bicycle_impl(query: str, count: int = 1, **kwargs) -> str:
+async def spawn_bicycle_impl(query: str, count: int = 1, reference_id: int = None,
+                             relative_distance: float = 10.0,
+                             relative_angle: float = 0.0, **kwargs) -> str:
+    """生成自行车。指定 reference_id 时第一辆生成在该 actor 相对位置（0度=正前方）"""
     if carla_client.world is None:
         await carla_client.connect('localhost', 2000)
     if carla_client.world is None:
         return "❌ 未连接到CARLA服务器，请先使用'连接CARLA服务器'命令进行连接"
-    
+
     count = int(count)  # ← 强制转int
-    
-    bicycles = await carla_client.spawn_bicycles(query, count=count)
+
+    bicycles = await carla_client.spawn_bicycles(
+        query, count=count, reference_id=reference_id,
+        relative_distance=relative_distance, relative_angle=relative_angle)
     if bicycles:
         if len(bicycles) == 1:
-            return f"✅ 已生成1辆{query}自行车 (ID: {bicycles[0].id})"
+            loc_note = f"，位于参照物 {reference_id} 相对位置" if reference_id is not None else ""
+            return f"✅ 已生成1辆{query}自行车 (ID: {bicycles[0].id}){loc_note}"
         else:
             ids = [b.id for b in bicycles]
             return f"✅ 已生成{len(bicycles)}辆{query}自行车，ID列表: {ids}"
     return "❌ 自行车生成失败，请确保CARLA服务器已连接且地图有可用生成点"
 
-async def spawn_motorcycle_impl(query: str, count: int = 1, **kwargs) -> str:
+async def spawn_motorcycle_impl(query: str, count: int = 1, reference_id: int = None,
+                                relative_distance: float = 10.0,
+                                relative_angle: float = 0.0, **kwargs) -> str:
+    """生成摩托车。指定 reference_id 时第一辆生成在该 actor 相对位置（0度=正前方）"""
     if carla_client.world is None:
         await carla_client.connect('localhost', 2000)
     if carla_client.world is None:
         return "❌ 未连接到CARLA服务器"
-    
+
     count = int(count)  # ← 强制转int
-    
-    motorcycles = await carla_client.spawn_motorcycles(query, count=count)
+
+    motorcycles = await carla_client.spawn_motorcycles(
+        query, count=count, reference_id=reference_id,
+        relative_distance=relative_distance, relative_angle=relative_angle)
     if motorcycles:
         if len(motorcycles) == 1:
-            return f"✅ 已生成1辆{query}摩托车 (ID: {motorcycles[0].id})"
+            loc_note = f"，位于参照物 {reference_id} 相对位置" if reference_id is not None else ""
+            return f"✅ 已生成1辆{query}摩托车 (ID: {motorcycles[0].id}){loc_note}"
         else:
             ids = [m.id for m in motorcycles]
             return f"✅ 已生成{len(motorcycles)}辆{query}摩托车，ID列表: {ids}"
     return "❌ 摩托车生成失败"
 
-async def spawn_prop_impl(query: str, count: int = 1, target_id: int = None, **kwargs) -> str:
-    """（实际功能：生成道具/警示牌，可指定放在某个actor后方）"""
+async def spawn_prop_impl(query: str, count: int = 1, target_id: int = None,
+                          reference_id: int = None, relative_distance: float = None,
+                          relative_angle: float = None, **kwargs) -> str:
+    """（实际功能：生成道具/警示牌，可指定放在某个actor前方/后方指定距离）"""
     if carla_client.world is None:
         await carla_client.connect('localhost', 2000)
     if carla_client.world is None:
         return "❌ 未连接到CARLA服务器"
-    
+
     count = int(count)
-    
-    # 如果指定了 target_id，计算目标后方位置
-    location = None
-    if target_id is not None:
+
+    # 参照物定位优先：reference_id + relative_distance + relative_angle（0=正前方）
+    anchor_loc = None
+    anchor_desc = None
+    if reference_id is not None:
+        anchor_loc = carla_client._resolve_anchor_location(reference_id, relative_distance, relative_angle or 0.0)
+        if anchor_loc is None:
+            return f"❌ 找不到参照物 actor (ID: {reference_id})，无法放置道具"
+        anchor_desc = f"参照物 {reference_id} 距离{relative_distance}m 角度{relative_angle or 0}°"
+
+    # 兼容旧参数 target_id：固定放在该目标后方5米
+    if anchor_loc is None and target_id is not None:
         target_actor = None
         for actor in carla_client.world.get_actors():
             if actor.id == int(target_id):
                 target_actor = actor
                 break
-        
+
         if target_actor is None:
             return f"❌ 找不到目标 actor (ID: {target_id})，无法放置道具"
-        
+
         # 获取目标位置和朝向，计算后方5米处
         target_loc = target_actor.get_location()
         target_rot = target_actor.get_transform().rotation
-        
+
         # 将 yaw 转换为弧度，计算后方偏移
-        import math
         yaw_rad = math.radians(target_rot.yaw)
         # 后方 = 当前位置 - 朝向向量 * 距离
         behind_x = target_loc.x - math.cos(yaw_rad) * 5.0
         behind_y = target_loc.y - math.sin(yaw_rad) * 5.0
         behind_z = target_loc.z + 0.1
-        
-        location = carla.Location(x=behind_x, y=behind_y, z=behind_z)
+
+        anchor_loc = carla.Location(x=behind_x, y=behind_y, z=behind_z)
+        anchor_desc = f"目标 {target_id} 后方5米"
         app_logger.info(f"🚧 道具将放置在目标 {target_id} 后方5米处 ({behind_x:.1f}, {behind_y:.1f})")
-    
-    props = await carla_client.spawn_props(query, count=count, location=location)
+
+    props = await carla_client.spawn_props(query, count=count, location=anchor_loc)
     if props:
+        loc_note = f"，位于{anchor_desc}" if anchor_desc else ""
         if len(props) == 1:
-            return f"✅ 已生成1个{query}道具 (ID: {props[0].id})" + (f"，位于目标 {target_id} 后方" if target_id else "")
+            return f"✅ 已生成1个{query}道具 (ID: {props[0].id}){loc_note}"
         else:
             ids = [p.id for p in props]
-            return f"✅ 已生成{len(props)}个{query}道具，ID列表: {ids}" + (f"，位于目标 {target_id} 后方" if target_id else "")
+            return f"✅ 已生成{len(props)}个{query}道具，ID列表: {ids}{loc_note}"
     return "❌ 道具生成失败"
 
-async def spawn_overturned_vehicle_impl(vehicle_type: str = 'model3', **kwargs) -> str:
-    """（实际功能：生成仰翻车辆）"""
+async def spawn_overturned_vehicle_impl(vehicle_type: str = 'model3', reference_id: int = None,
+                                        relative_distance: float = None,
+                                        relative_angle: float = 0.0, **kwargs) -> str:
+    """（实际功能：生成仰翻车辆，可指定参照物定位）"""
     if carla_client.world is None:
         await carla_client.connect('localhost', 2000)
     if carla_client.world is None:
         return "❌ 未连接到CARLA服务器"
-    
-    vehicle = await carla_client.spawn_overturned_vehicle(vehicle_type)
+
+    anchor_loc = None
+    if reference_id is not None:
+        anchor_loc = carla_client._resolve_anchor_location(reference_id, relative_distance, relative_angle)
+        if anchor_loc is None:
+            return f"❌ 找不到参照物 actor (ID: {reference_id})，无法定位仰翻车辆"
+
+    vehicle = await carla_client.spawn_overturned_vehicle(vehicle_type, location=anchor_loc)
     if vehicle:
-        return f"✅ 已生成仰翻的{vehicle_type} (ID: {vehicle.id})，物理已禁用以保持姿态"
+        loc_note = f"，位于参照物 {reference_id} 相对位置" if reference_id is not None else ""
+        return f"✅ 已生成仰翻的{vehicle_type} (ID: {vehicle.id})，物理已禁用以保持姿态{loc_note}"
     return "❌ 仰翻车辆生成失败"
 
 async def set_weather_impl(weather_type: str) -> str:
@@ -3943,28 +4198,53 @@ def _format_scenario_result(result) -> str:
     return "\n".join(lines)
 
 
+def _resolve_anchor_from_args(reference_id=None, relative_distance=None, relative_angle=0.0):
+    """把工具的参照物定位参数解析成世界坐标锚点 Location。
+    未指定 reference_id 或参照物不存在时返回 None（此时场景按默认位置布设）。"""
+    if reference_id is None:
+        return None
+    if carla_client.world is None:
+        return None
+    anchor = carla_client._resolve_anchor_location(reference_id, relative_distance, relative_angle)
+    if anchor is None:
+        app_logger.warning(f"⚠️ 参照物 actor ID={reference_id} 不存在或已销毁，忽略定位参数，按默认位置布设")
+    return anchor
+
+
 async def scenario_highway_ramp_impl(ramp_type: str = 'on', vehicle_count: int = 4,
-                                     map_name: Optional[str] = None, **kwargs) -> str:
-    """高速-进出匝道场景底层实现"""
-    result = await carla_client.scenario_highway_ramp(ramp_type, vehicle_count, map_name)
+                                     map_name: Optional[str] = None,
+                                     reference_id: int = None, relative_distance: float = None,
+                                     relative_angle: float = 0.0, **kwargs) -> str:
+    """高速-进出匝道场景底层实现。reference_id+relative_distance+relative_angle 可指定场景出现位置（相对某 actor）"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_highway_ramp(ramp_type, vehicle_count, map_name, anchor_loc=anchor)
     return _format_scenario_result(result)
 
 
-async def scenario_lane_merge_impl(vehicle_count: int = 4, map_name: Optional[str] = None, **kwargs) -> str:
-    """城市-车道合并场景底层实现"""
-    result = await carla_client.scenario_lane_merge(vehicle_count, map_name)
+async def scenario_lane_merge_impl(vehicle_count: int = 4, map_name: Optional[str] = None,
+                                   reference_id: int = None, relative_distance: float = None,
+                                   relative_angle: float = 0.0, **kwargs) -> str:
+    """城市-车道合并场景底层实现。reference_id 等参数可指定场景出现位置"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_lane_merge(vehicle_count, map_name, anchor_loc=anchor)
     return _format_scenario_result(result)
 
 
-async def scenario_diverge_merge_impl(vehicle_count: int = 4, map_name: Optional[str] = None, **kwargs) -> str:
-    """城市-分合流路口场景底层实现"""
-    result = await carla_client.scenario_diverge_merge(vehicle_count, map_name)
+async def scenario_diverge_merge_impl(vehicle_count: int = 4, map_name: Optional[str] = None,
+                                      reference_id: int = None, relative_distance: float = None,
+                                      relative_angle: float = 0.0, **kwargs) -> str:
+    """城市-分合流路口场景底层实现。reference_id 等参数可指定场景出现位置"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_diverge_merge(vehicle_count, map_name, anchor_loc=anchor)
     return _format_scenario_result(result)
 
 
-async def scenario_side_road_impl(vehicle_count: int = 4, map_name: Optional[str] = None, **kwargs) -> str:
-    """城市-辅路场景底层实现"""
-    result = await carla_client.scenario_side_road(vehicle_count, map_name)
+async def scenario_side_road_impl(vehicle_count: int = 4, map_name: Optional[str] = None,
+                                  reference_id: int = None, relative_distance: float = None,
+                                  relative_angle: float = 0.0, **kwargs) -> str:
+    """城市-辅路场景底层实现。reference_id 等参数可指定场景出现位置"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_side_road(vehicle_count, map_name, anchor_loc=anchor)
     return _format_scenario_result(result)
 
 
@@ -3987,18 +4267,28 @@ def _format_scenario_result2(result) -> str:
 
 
 async def scenario_junction_light_impl(junction_shape: str = 'any', vehicle_count: int = 4,
-                                       map_name: Optional[str] = None, **kwargs) -> str:
-    result = await carla_client.scenario_junction_light(junction_shape, vehicle_count, map_name)
+                                       map_name: Optional[str] = None,
+                                       reference_id: int = None, relative_distance: float = None,
+                                       relative_angle: float = 0.0, **kwargs) -> str:
+    """路口红绿灯场景。reference_id 等参数可指定场景出现位置"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_junction_light(junction_shape, vehicle_count, map_name, anchor_loc=anchor)
     return _format_scenario_result2(result)
 
 
-async def scenario_tunnel_impl(vehicle_count: int = 4, map_name: Optional[str] = None, **kwargs) -> str:
-    result = await carla_client.scenario_tunnel(vehicle_count, map_name)
+async def scenario_tunnel_impl(vehicle_count: int = 4, map_name: Optional[str] = None,
+                               reference_id: int = None, relative_distance: float = None,
+                               relative_angle: float = 0.0, **kwargs) -> str:
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_tunnel(vehicle_count, map_name, anchor_loc=anchor)
     return _format_scenario_result2(result)
 
 
-async def scenario_roundabout_impl(vehicle_count: int = 5, map_name: Optional[str] = None, **kwargs) -> str:
-    result = await carla_client.scenario_roundabout(vehicle_count, map_name)
+async def scenario_roundabout_impl(vehicle_count: int = 5, map_name: Optional[str] = None,
+                                   reference_id: int = None, relative_distance: float = None,
+                                   relative_angle: float = 0.0, **kwargs) -> str:
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_roundabout(vehicle_count, map_name, anchor_loc=anchor)
     return _format_scenario_result2(result)
 
 
@@ -4009,66 +4299,113 @@ async def spawn_pedestrian_pose_impl(pedestrian_type: str = 'child', pose: str =
 
 
 async def scenario_two_wheeler_impl(vehicle_type: str = 'bicycle', state: str = 'stand',
-                                    count: int = 2, **kwargs) -> str:
-    result = await carla_client.scenario_two_wheeler(vehicle_type, state, count)
+                                    count: int = 2, reference_id: int = None,
+                                    relative_distance: float = None,
+                                    relative_angle: float = 0.0, **kwargs) -> str:
+    """二轮车场景。reference_id 等参数可指定生成位置（相对某 actor）"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_two_wheeler(vehicle_type, state, count, anchor_loc=anchor)
     return _format_scenario_result2(result)
 
 
 async def spawn_special_vehicle_impl(vehicle_type: str = 'ambulance', moving: bool = True,
-                                     count: int = 1, **kwargs) -> str:
-    result = await carla_client.spawn_special_vehicle(vehicle_type, moving, count)
+                                     count: int = 1, reference_id: int = None,
+                                     relative_distance: float = None,
+                                     relative_angle: float = 0.0, **kwargs) -> str:
+    """特殊任务车辆（救护车/警车）。reference_id 等参数可指定生成位置（相对某 actor）"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.spawn_special_vehicle(vehicle_type, moving, count, anchor_loc=anchor)
     return _format_scenario_result2(result)
 
 
-async def scenario_officer_impl(element: str = 'traffic_police', with_companion: bool = False, **kwargs) -> str:
-    result = await carla_client.scenario_officer(element, with_companion)
+async def scenario_officer_impl(element: str = 'traffic_police', with_companion: bool = False,
+                                reference_id: int = None, relative_distance: float = None,
+                                relative_angle: float = 0.0, **kwargs) -> str:
+    """特殊群体场景。reference_id 等参数可指定生成位置（相对某 actor）"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_officer(element, with_companion, anchor_loc=anchor)
     return _format_scenario_result2(result)
 
 
-async def scenario_backlight_impl(map_name: Optional[str] = None, **kwargs) -> str:
-    result = await carla_client.scenario_backlight(map_name)
+async def scenario_backlight_impl(map_name: Optional[str] = None, reference_id: int = None,
+                                  relative_distance: float = None,
+                                  relative_angle: float = 0.0, **kwargs) -> str:
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_backlight(map_name, anchor_loc=anchor)
     return _format_scenario_result2(result)
 
 
 async def spawn_rollover_vehicle_impl(vehicle_type: str = 'car', rollover: str = 'side',
-                                      map_name: Optional[str] = None, **kwargs) -> str:
-    result = await carla_client.spawn_rollover_vehicle(vehicle_type, rollover, map_name)
+                                      map_name: Optional[str] = None, reference_id: int = None,
+                                      relative_distance: float = None,
+                                      relative_angle: float = 0.0, **kwargs) -> str:
+    """翻车车辆。reference_id 等参数可指定生成位置（相对某 actor）"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.spawn_rollover_vehicle(vehicle_type, rollover, map_name, anchor_loc=anchor)
     return _format_scenario_result2(result)
 
 
 async def scenario_lead_vehicle_impl(mode: str = 'stationary', distance: float = 25.0,
-                                     map_name: Optional[str] = None, **kwargs) -> str:
-    result = await carla_client.scenario_lead_vehicle(mode, distance, map_name)
+                                     map_name: Optional[str] = None, reference_id: int = None,
+                                     relative_distance: float = None,
+                                     relative_angle: float = 0.0, **kwargs) -> str:
+    """前车急刹/静止场景。reference_id 等参数可指定场景出现位置（相对某 actor）"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_lead_vehicle(mode, distance, map_name, anchor_loc=anchor)
     return _format_scenario_result2(result)
 
 
-async def scenario_cut_in_impl(direction: str = 'left', map_name: Optional[str] = None, **kwargs) -> str:
-    result = await carla_client.scenario_cut_in(direction, map_name)
+async def scenario_cut_in_impl(direction: str = 'left', map_name: Optional[str] = None,
+                               reference_id: int = None, relative_distance: float = None,
+                               relative_angle: float = 0.0, **kwargs) -> str:
+    """危险切入场景。reference_id 等参数可指定场景出现位置（相对某 actor）"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_cut_in(direction, map_name, anchor_loc=anchor)
     return _format_scenario_result2(result)
 
 
-async def scenario_lead_disappear_impl(map_name: Optional[str] = None, **kwargs) -> str:
-    result = await carla_client.scenario_lead_disappear(map_name)
+async def scenario_lead_disappear_impl(map_name: Optional[str] = None, reference_id: int = None,
+                                       relative_distance: float = None,
+                                       relative_angle: float = 0.0, **kwargs) -> str:
+    """前车消失场景。reference_id 等参数可指定场景出现位置（相对某 actor）"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_lead_disappear(map_name, anchor_loc=anchor)
     return _format_scenario_result2(result)
 
 
-async def scenario_crossing_hazard_impl(crosser: str = 'pedestrian', map_name: Optional[str] = None, **kwargs) -> str:
-    result = await carla_client.scenario_crossing_hazard(crosser, map_name)
+async def scenario_crossing_hazard_impl(crosser: str = 'pedestrian', map_name: Optional[str] = None,
+                                        reference_id: int = None, relative_distance: float = None,
+                                        relative_angle: float = 0.0, **kwargs) -> str:
+    """路口危险横穿场景。reference_id 等参数可指定场景出现位置（相对某 actor）"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_crossing_hazard(crosser, map_name, anchor_loc=anchor)
     return _format_scenario_result2(result)
 
 
-async def scenario_low_overlap_impl(offset_ratio: float = 0.35, map_name: Optional[str] = None, **kwargs) -> str:
-    result = await carla_client.scenario_low_overlap(offset_ratio, map_name)
+async def scenario_low_overlap_impl(offset_ratio: float = 0.35, map_name: Optional[str] = None,
+                                    reference_id: int = None, relative_distance: float = None,
+                                    relative_angle: float = 0.0, **kwargs) -> str:
+    """低重叠场景。reference_id 等参数可指定场景出现位置（相对某 actor）"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_low_overlap(offset_ratio, map_name, anchor_loc=anchor)
     return _format_scenario_result2(result)
 
 
-async def scenario_wrong_way_impl(speed: float = 8.0, map_name: Optional[str] = None, **kwargs) -> str:
-    result = await carla_client.scenario_wrong_way(speed, map_name)
+async def scenario_wrong_way_impl(speed: float = 8.0, map_name: Optional[str] = None,
+                                  reference_id: int = None, relative_distance: float = None,
+                                  relative_angle: float = 0.0, **kwargs) -> str:
+    """逆行场景。reference_id 等参数可指定场景出现位置（相对某 actor）"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_wrong_way(speed, map_name, anchor_loc=anchor)
     return _format_scenario_result2(result)
 
 
-async def scenario_unprotected_turn_impl(map_name: Optional[str] = None, **kwargs) -> str:
-    result = await carla_client.scenario_unprotected_turn(map_name)
+async def scenario_unprotected_turn_impl(map_name: Optional[str] = None, reference_id: int = None,
+                                         relative_distance: float = None,
+                                         relative_angle: float = 0.0, **kwargs) -> str:
+    """无保护转弯场景。reference_id 等参数可指定场景出现位置（相对某 actor）"""
+    anchor = _resolve_anchor_from_args(reference_id, relative_distance, relative_angle)
+    result = await carla_client.scenario_unprotected_turn(map_name, anchor_loc=anchor)
     return _format_scenario_result2(result)
 
 
@@ -4086,36 +4423,53 @@ async def spawn_vehicle(query: str, count: int = 1) -> str:
     return await spawn_vehicle_impl(query, count=count)
 
 @mcp.tool()
-async def spawn_bicycle(query: str, count: int = 1) -> str:
+async def spawn_bicycle(query: str, count: int = 1, reference_id: Optional[int] = None,
+                        relative_distance: float = 10.0, relative_angle: float = 0.0) -> str:
     """（实际功能：生成自行车）
-    
+
     支持类型: crossbike(BH Crossbike), century(Diamondback Century), omafiets(Gazelle Omafiets)
+    指定 reference_id 时，自行车生成在该 actor 的相对位置（relative_distance米，relative_angle度，0=正前方）
     """
-    return await spawn_bicycle_impl(query, count=count)
+    return await spawn_bicycle_impl(query, count=count, reference_id=reference_id,
+                                    relative_distance=relative_distance, relative_angle=relative_angle)
 
 @mcp.tool()
-async def spawn_motorcycle(query: str, count: int = 1) -> str:
+async def spawn_motorcycle(query: str, count: int = 1, reference_id: Optional[int] = None,
+                           relative_distance: float = 10.0, relative_angle: float = 0.0) -> str:
     """（实际功能：生成摩托车）
-    
+
     支持类型: ninja(Kawasaki Ninja), yzf(Yamaha YZF), low_rider(Harley-Davidson Low Rider)
+    指定 reference_id 时，摩托车生成在该 actor 的相对位置（relative_distance米，relative_angle度，0=正前方）
     """
-    return await spawn_motorcycle_impl(query, count=count)
+    return await spawn_motorcycle_impl(query, count=count, reference_id=reference_id,
+                                       relative_distance=relative_distance, relative_angle=relative_angle)
 
 @mcp.tool()
-async def spawn_prop(query: str, count: int = 1) -> str:
+async def spawn_prop(query: str, count: int = 1, reference_id: Optional[int] = None,
+                     relative_distance: float = 10.0, relative_angle: float = 0.0,
+                     target_id: Optional[int] = None) -> str:
     """（实际功能：生成道具/警示牌）
-    
+
     支持类型: cone(施工锥), barrier(路障), warning(三角警示牌/交通警示牌)
+    指定 reference_id 时，道具生成在该 actor 的相对位置（relative_distance米，relative_angle度，0=正前方）；
+    兼容旧参数 target_id（固定放置在其后方5米）
     """
-    return await spawn_prop_impl(query, count=count)
+    return await spawn_prop_impl(query, count=count, reference_id=reference_id,
+                                 relative_distance=relative_distance, relative_angle=relative_angle,
+                                 target_id=target_id)
 
 @mcp.tool()
-async def spawn_overturned_vehicle(vehicle_type: str = 'model3') -> str:
+async def spawn_overturned_vehicle(vehicle_type: str = 'model3', reference_id: Optional[int] = None,
+                                   relative_distance: Optional[float] = None,
+                                   relative_angle: float = 0.0) -> str:
     """（实际功能：生成仰翻的车辆）
-    
+
     支持类型: model3(特斯拉Model3), mustang(福特野马)等
+    指定 reference_id 时，仰翻车辆生成在该 actor 的相对位置（relative_distance米，relative_angle度，0=正前方）
     """
-    return await spawn_overturned_vehicle_impl(vehicle_type)
+    return await spawn_overturned_vehicle_impl(vehicle_type, reference_id=reference_id,
+                                               relative_distance=relative_distance,
+                                               relative_angle=relative_angle)
 
 @mcp.tool()
 async def set_weather(weather_type: str) -> str:
@@ -4178,58 +4532,98 @@ async def stop_recording() -> str:
 
 @mcp.tool()
 async def scenario_highway_ramp(ramp_type: str = "on", vehicle_count: int = 4,
-                                map_name: Optional[str] = None) -> str:
+                                map_name: Optional[str] = None, reference_id: Optional[int] = None,
+                                relative_distance: Optional[float] = None,
+                                relative_angle: float = 0.0) -> str:
     """（实际功能：高速-进出匝道场景）
     在高速公路主路与匝道的汇流/分流点自动布设车辆。
     ramp_type: "on"(匝道汇入) / "off"(主路驶出匝道)
+    指定 reference_id 时，场景优先出现在该 actor 相对位置附近
     """
-    return await scenario_highway_ramp_impl(ramp_type, vehicle_count, map_name)
+    return await scenario_highway_ramp_impl(ramp_type, vehicle_count, map_name,
+                                            reference_id=reference_id,
+                                            relative_distance=relative_distance,
+                                            relative_angle=relative_angle)
 
 
 @mcp.tool()
-async def scenario_lane_merge(vehicle_count: int = 4, map_name: Optional[str] = None) -> str:
+async def scenario_lane_merge(vehicle_count: int = 4, map_name: Optional[str] = None,
+                              reference_id: Optional[int] = None,
+                              relative_distance: Optional[float] = None,
+                              relative_angle: float = 0.0) -> str:
     """（实际功能：城市-车道合并场景）
     自动寻找车道消失（车道数减少）位置，在消失车道和延续车道布设车辆演示汇流。
+    指定 reference_id 时，场景优先出现在该 actor 相对位置附近
     """
-    return await scenario_lane_merge_impl(vehicle_count, map_name)
+    return await scenario_lane_merge_impl(vehicle_count, map_name, reference_id=reference_id,
+                                          relative_distance=relative_distance,
+                                          relative_angle=relative_angle)
 
 
 @mcp.tool()
-async def scenario_diverge_merge(vehicle_count: int = 4, map_name: Optional[str] = None) -> str:
+async def scenario_diverge_merge(vehicle_count: int = 4, map_name: Optional[str] = None,
+                                 reference_id: Optional[int] = None,
+                                 relative_distance: Optional[float] = None,
+                                 relative_angle: float = 0.0) -> str:
     """（实际功能：城市-分合流路口场景）
     找到多臂路口，在各进口臂布设车辆，经路口分流/合流。
+    指定 reference_id 时，场景优先出现在该 actor 相对位置附近
     """
-    return await scenario_diverge_merge_impl(vehicle_count, map_name)
+    return await scenario_diverge_merge_impl(vehicle_count, map_name, reference_id=reference_id,
+                                             relative_distance=relative_distance,
+                                             relative_angle=relative_angle)
 
 
 @mcp.tool()
-async def scenario_side_road(vehicle_count: int = 4, map_name: Optional[str] = None) -> str:
+async def scenario_side_road(vehicle_count: int = 4, map_name: Optional[str] = None,
+                             reference_id: Optional[int] = None,
+                             relative_distance: Optional[float] = None,
+                             relative_angle: float = 0.0) -> str:
     """（实际功能：城市-辅路场景）
     自动寻找与主路平行的辅路，在主路和辅路上同时布设车辆。
+    指定 reference_id 时，场景优先出现在该 actor 相对位置附近
     """
-    return await scenario_side_road_impl(vehicle_count, map_name)
+    return await scenario_side_road_impl(vehicle_count, map_name, reference_id=reference_id,
+                                         relative_distance=relative_distance,
+                                         relative_angle=relative_angle)
 
 
 # ============ 第2~4周场景工具装饰器 ============
 @mcp.tool()
 async def scenario_junction_light(junction_shape: str = "any", vehicle_count: int = 4,
-                                  map_name: Optional[str] = None) -> str:
+                                  map_name: Optional[str] = None, reference_id: Optional[int] = None,
+                                  relative_distance: Optional[float] = None,
+                                  relative_angle: float = 0.0) -> str:
     """（实际功能：城市-路口及红绿灯场景）
     junction_shape: "any"任意 / "cross"十字 / "t" T型 / "y" Y型
+    指定 reference_id 时，场景优先出现在该 actor 相对位置附近
     """
-    return await scenario_junction_light_impl(junction_shape, vehicle_count, map_name)
+    return await scenario_junction_light_impl(junction_shape, vehicle_count, map_name,
+                                              reference_id=reference_id,
+                                              relative_distance=relative_distance,
+                                              relative_angle=relative_angle)
 
 
 @mcp.tool()
-async def scenario_tunnel(vehicle_count: int = 4, map_name: Optional[str] = None) -> str:
-    """（实际功能：隧道场景）自动寻找下沉道路（隧道/地下道）布设车辆，推荐Town04/Town05"""
-    return await scenario_tunnel_impl(vehicle_count, map_name)
+async def scenario_tunnel(vehicle_count: int = 4, map_name: Optional[str] = None,
+                          reference_id: Optional[int] = None,
+                          relative_distance: Optional[float] = None,
+                          relative_angle: float = 0.0) -> str:
+    """（实际功能：隧道场景）自动寻找下穿通道布设车辆，推荐Town04。reference_id 可指定附近位置"""
+    return await scenario_tunnel_impl(vehicle_count, map_name, reference_id=reference_id,
+                                      relative_distance=relative_distance,
+                                      relative_angle=relative_angle)
 
 
 @mcp.tool()
-async def scenario_roundabout(vehicle_count: int = 5, map_name: Optional[str] = None) -> str:
-    """（实际功能：环岛场景）自动寻找环形路口布设车辆，推荐Town05"""
-    return await scenario_roundabout_impl(vehicle_count, map_name)
+async def scenario_roundabout(vehicle_count: int = 5, map_name: Optional[str] = None,
+                              reference_id: Optional[int] = None,
+                              relative_distance: Optional[float] = None,
+                              relative_angle: float = 0.0) -> str:
+    """（实际功能：环岛场景）自动寻找环形路口布设车辆，推荐Town05。reference_id 可指定附近位置"""
+    return await scenario_roundabout_impl(vehicle_count, map_name, reference_id=reference_id,
+                                          relative_distance=relative_distance,
+                                          relative_angle=relative_angle)
 
 
 @mcp.tool()
@@ -4244,78 +4638,133 @@ async def spawn_pedestrian_pose(pedestrian_type: str = "child", pose: str = "sta
 
 @mcp.tool()
 async def scenario_two_wheeler(vehicle_type: str = "bicycle", state: str = "stand",
-                               count: int = 2) -> str:
-    """（实际功能：自行车/摩托车-站立、行进、倒地场景）"""
-    return await scenario_two_wheeler_impl(vehicle_type, state, count)
+                               count: int = 2, reference_id: Optional[int] = None,
+                               relative_distance: Optional[float] = None,
+                               relative_angle: float = 0.0) -> str:
+    """（实际功能：自行车/摩托车-站立、行进、倒地场景）reference_id 可指定生成位置"""
+    return await scenario_two_wheeler_impl(vehicle_type, state, count, reference_id=reference_id,
+                                           relative_distance=relative_distance,
+                                           relative_angle=relative_angle)
 
 
 @mcp.tool()
 async def spawn_special_vehicle(vehicle_type: str = "ambulance", moving: bool = True,
-                                count: int = 1) -> str:
-    """（实际功能：特殊任务车辆）ambulance救护车 / police警车（自动配送物流车无蓝图）"""
-    return await spawn_special_vehicle_impl(vehicle_type, moving, count)
+                                count: int = 1, reference_id: Optional[int] = None,
+                                relative_distance: Optional[float] = None,
+                                relative_angle: float = 0.0) -> str:
+    """（实际功能：特殊任务车辆）ambulance救护车 / police警车。reference_id 可指定生成位置"""
+    return await spawn_special_vehicle_impl(vehicle_type, moving, count, reference_id=reference_id,
+                                            relative_distance=relative_distance,
+                                            relative_angle=relative_angle)
 
 
 @mcp.tool()
-async def scenario_officer(element: str = "traffic_police", with_companion: bool = False) -> str:
-    """（实际功能：特殊群体场景）traffic_police交警 / wheelchair轮椅 / stroller婴儿车(无蓝图)"""
-    return await scenario_officer_impl(element, with_companion)
+async def scenario_officer(element: str = "traffic_police", with_companion: bool = False,
+                           reference_id: Optional[int] = None,
+                           relative_distance: Optional[float] = None,
+                           relative_angle: float = 0.0) -> str:
+    """（实际功能：特殊群体场景）traffic_police交警 / wheelchair轮椅。reference_id 可指定生成位置"""
+    return await scenario_officer_impl(element, with_companion, reference_id=reference_id,
+                                       relative_distance=relative_distance,
+                                       relative_angle=relative_angle)
 
 
 @mcp.tool()
-async def scenario_backlight(map_name: Optional[str] = None) -> str:
-    """（实际功能：逆光场景）低角度太阳正对来车方向 + 对向车辆开大灯"""
-    return await scenario_backlight_impl(map_name)
+async def scenario_backlight(map_name: Optional[str] = None, reference_id: Optional[int] = None,
+                             relative_distance: Optional[float] = None,
+                             relative_angle: float = 0.0) -> str:
+    """（实际功能：逆光场景）低角度太阳正对来车方向 + 对向车辆开大灯。reference_id 可指定道路位置"""
+    return await scenario_backlight_impl(map_name, reference_id=reference_id,
+                                         relative_distance=relative_distance,
+                                         relative_angle=relative_angle)
 
 
 @mcp.tool()
 async def spawn_rollover_vehicle(vehicle_type: str = "car", rollover: str = "side",
-                                 map_name: Optional[str] = None) -> str:
-    """（实际功能：翻车车辆）vehicle_type: car汽车/van货车近似；rollover: side侧翻/upside仰翻"""
-    return await spawn_rollover_vehicle_impl(vehicle_type, rollover, map_name)
+                                 map_name: Optional[str] = None, reference_id: Optional[int] = None,
+                                 relative_distance: Optional[float] = None,
+                                 relative_angle: float = 0.0) -> str:
+    """（实际功能：翻车车辆）vehicle_type: car汽车/van货车近似；rollover: side侧翻/upside仰翻。reference_id 可指定生成位置"""
+    return await spawn_rollover_vehicle_impl(vehicle_type, rollover, map_name,
+                                             reference_id=reference_id,
+                                             relative_distance=relative_distance,
+                                             relative_angle=relative_angle)
 
 
 @mcp.tool()
 async def scenario_lead_vehicle(mode: str = "stationary", distance: float = 25.0,
-                                map_name: Optional[str] = None) -> str:
-    """（实际功能：前车急刹/静止场景）mode: stationary静止 / brake急刹"""
-    return await scenario_lead_vehicle_impl(mode, distance, map_name)
+                                map_name: Optional[str] = None, reference_id: Optional[int] = None,
+                                relative_distance: Optional[float] = None,
+                                relative_angle: float = 0.0) -> str:
+    """（实际功能：前车急刹/静止场景）mode: stationary静止 / brake急刹。reference_id 可指定场景位置"""
+    return await scenario_lead_vehicle_impl(mode, distance, map_name, reference_id=reference_id,
+                                            relative_distance=relative_distance,
+                                            relative_angle=relative_angle)
 
 
 @mcp.tool()
-async def scenario_cut_in(direction: str = "left", map_name: Optional[str] = None) -> str:
-    """（实际功能：危险切入场景）邻道车突然变道到本车前方"""
-    return await scenario_cut_in_impl(direction, map_name)
+async def scenario_cut_in(direction: str = "left", map_name: Optional[str] = None,
+                          reference_id: Optional[int] = None,
+                          relative_distance: Optional[float] = None,
+                          relative_angle: float = 0.0) -> str:
+    """（实际功能：危险切入场景）邻道车突然变道到本车前方。reference_id 可指定场景位置"""
+    return await scenario_cut_in_impl(direction, map_name, reference_id=reference_id,
+                                      relative_distance=relative_distance,
+                                      relative_angle=relative_angle)
 
 
 @mcp.tool()
-async def scenario_lead_disappear(map_name: Optional[str] = None) -> str:
-    """（实际功能：前车消失场景）前车切入邻道，露出前方静止障碍"""
-    return await scenario_lead_disappear_impl(map_name)
+async def scenario_lead_disappear(map_name: Optional[str] = None, reference_id: Optional[int] = None,
+                                  relative_distance: Optional[float] = None,
+                                  relative_angle: float = 0.0) -> str:
+    """（实际功能：前车消失场景）前车切入邻道，露出前方静止障碍。reference_id 可指定场景位置"""
+    return await scenario_lead_disappear_impl(map_name, reference_id=reference_id,
+                                              relative_distance=relative_distance,
+                                              relative_angle=relative_angle)
 
 
 @mcp.tool()
-async def scenario_crossing_hazard(crosser: str = "pedestrian", map_name: Optional[str] = None) -> str:
-    """（实际功能：路口危险横穿）crosser: pedestrian行人/vehicle机动车/bicycle自行车"""
-    return await scenario_crossing_hazard_impl(crosser, map_name)
+async def scenario_crossing_hazard(crosser: str = "pedestrian", map_name: Optional[str] = None,
+                                   reference_id: Optional[int] = None,
+                                   relative_distance: Optional[float] = None,
+                                   relative_angle: float = 0.0) -> str:
+    """（实际功能：路口危险横穿）crosser: pedestrian行人/vehicle机动车/bicycle自行车。reference_id 可指定路口位置"""
+    return await scenario_crossing_hazard_impl(crosser, map_name, reference_id=reference_id,
+                                               relative_distance=relative_distance,
+                                               relative_angle=relative_angle)
 
 
 @mcp.tool()
-async def scenario_low_overlap(offset_ratio: float = 0.35, map_name: Optional[str] = None) -> str:
-    """（实际功能：低重叠率行驶目标）目标车贴车道线侵入本车道"""
-    return await scenario_low_overlap_impl(offset_ratio, map_name)
+async def scenario_low_overlap(offset_ratio: float = 0.35, map_name: Optional[str] = None,
+                               reference_id: Optional[int] = None,
+                               relative_distance: Optional[float] = None,
+                               relative_angle: float = 0.0) -> str:
+    """（实际功能：低重叠率行驶目标）目标车贴车道线侵入本车道。reference_id 可指定场景位置"""
+    return await scenario_low_overlap_impl(offset_ratio, map_name, reference_id=reference_id,
+                                           relative_distance=relative_distance,
+                                           relative_angle=relative_angle)
 
 
 @mcp.tool()
-async def scenario_wrong_way(speed: float = 8.0, map_name: Optional[str] = None) -> str:
-    """（实际功能：逆行场景）对向车道出现逆行车辆"""
-    return await scenario_wrong_way_impl(speed, map_name)
+async def scenario_wrong_way(speed: float = 8.0, map_name: Optional[str] = None,
+                             reference_id: Optional[int] = None,
+                             relative_distance: Optional[float] = None,
+                             relative_angle: float = 0.0) -> str:
+    """（实际功能：逆行场景）对向车道出现逆行车辆。reference_id 可指定道路位置"""
+    return await scenario_wrong_way_impl(speed, map_name, reference_id=reference_id,
+                                         relative_distance=relative_distance,
+                                         relative_angle=relative_angle)
 
 
 @mcp.tool()
-async def scenario_unprotected_turn(map_name: Optional[str] = None) -> str:
-    """（实际功能：路口无保护通行场景）无信号灯路口多方向来车交汇"""
-    return await scenario_unprotected_turn_impl(map_name)
+async def scenario_unprotected_turn(map_name: Optional[str] = None,
+                                    reference_id: Optional[int] = None,
+                                    relative_distance: Optional[float] = None,
+                                    relative_angle: float = 0.0) -> str:
+    """（实际功能：路口无保护通行场景）无信号灯路口多方向来车交汇。reference_id 可指定路口位置"""
+    return await scenario_unprotected_turn_impl(map_name, reference_id=reference_id,
+                                                relative_distance=relative_distance,
+                                                relative_angle=relative_angle)
 
 
 
@@ -4501,6 +4950,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "query": {"type": "string", "description": "自行车型号，如crossbike, century, omafiets", "enum": ["crossbike", "century", "omafiets"]},
                             "count": {"type": "integer", "description": "生成自行车数量，默认为1", "default": 1}
                         },
@@ -4516,6 +4968,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "query": {"type": "string", "description": "摩托车型号，如ninja, yzf, low_rider", "enum": ["ninja", "yzf", "low_rider"]},
                             "count": {"type": "integer", "description": "生成摩托车数量，默认为1", "default": 1}
                         },
@@ -4531,6 +4986,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "query": {"type": "string", "description": "道具类型，如cone, barrier, warning", "enum": ["cone", "barrier", "warning"]},
                             "count": {"type": "integer", "description": "生成道具数量，默认为1", "default": 1},
                             "target_id": {"type": "integer", "description": "目标actor ID，道具将放置在该目标后方5米处。如仰翻车辆的ID", "default": None}
@@ -4547,6 +5005,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "vehicle_type": {"type": "string", "description": "车辆类型，如model3, mustang, a2", "enum": ["model3", "mustang", "a2"], "default": "model3"}
                         },
                         "required": []
@@ -4755,6 +5216,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "ramp_type": {"type": "string", "enum": ["on", "off"], "description": "on=匝道汇入(默认), off=主路驶出匝道", "default": "on"},
                             "vehicle_count": {"type": "integer", "description": "总车辆数（主路+匝道），默认4", "default": 4},
                             "map_name": {"type": "string", "description": "可选，指定加载的地图名如Town04", "default": None}
@@ -4771,6 +5235,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "vehicle_count": {"type": "integer", "description": "总车辆数，默认4", "default": 4},
                             "map_name": {"type": "string", "description": "可选，指定加载的地图名", "default": None}
                         },
@@ -4786,6 +5253,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "vehicle_count": {"type": "integer", "description": "总车辆数，默认4", "default": 4},
                             "map_name": {"type": "string", "description": "可选，指定加载的地图名", "default": None}
                         },
@@ -4801,6 +5271,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "vehicle_count": {"type": "integer", "description": "总车辆数，默认4", "default": 4},
                             "map_name": {"type": "string", "description": "可选，指定加载的地图名", "default": None}
                         },
@@ -4816,6 +5289,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "junction_shape": {"type": "string", "enum": ["any", "cross", "t", "y"], "description": "路口形状", "default": "any"},
                             "vehicle_count": {"type": "integer", "description": "总车辆数，默认4", "default": 4},
                             "map_name": {"type": "string", "description": "可选，指定加载的地图名", "default": None}
@@ -4832,6 +5308,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "vehicle_count": {"type": "integer", "description": "总车辆数，默认4", "default": 4},
                             "map_name": {"type": "string", "description": "可选，推荐Town04/Town05", "default": None}
                         },
@@ -4847,6 +5326,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "vehicle_count": {"type": "integer", "description": "总车辆数，默认5", "default": 5},
                             "map_name": {"type": "string", "description": "可选，推荐Town05", "default": None}
                         },
@@ -4878,6 +5360,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "vehicle_type": {"type": "string", "enum": ["bicycle", "motorcycle"], "description": "二轮车类型", "default": "bicycle"},
                             "state": {"type": "string", "enum": ["stand", "move", "fallen"], "description": "状态", "default": "stand"},
                             "count": {"type": "integer", "description": "数量，默认2", "default": 2}
@@ -4894,6 +5379,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "vehicle_type": {"type": "string", "enum": ["ambulance", "police"], "description": "车辆类型", "default": "ambulance"},
                             "moving": {"type": "boolean", "description": "是否行进", "default": True},
                             "count": {"type": "integer", "description": "数量，默认1", "default": 1}
@@ -4910,6 +5398,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "element": {"type": "string", "enum": ["traffic_police", "wheelchair", "stroller"], "description": "元素类型", "default": "traffic_police"},
                             "with_companion": {"type": "boolean", "description": "是否有成人伴行", "default": False}
                         },
@@ -4939,6 +5430,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "map_name": {"type": "string", "description": "可选，指定地图", "default": None}
                         },
                         "required": []
@@ -4953,6 +5447,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "vehicle_type": {"type": "string", "enum": ["car", "van", "truck"], "description": "车辆类型", "default": "car"},
                             "rollover": {"type": "string", "enum": ["side", "upside"], "description": "侧翻/仰翻", "default": "side"},
                             "map_name": {"type": "string", "description": "可选，指定地图", "default": None}
@@ -4969,6 +5466,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "mode": {"type": "string", "enum": ["stationary", "brake"], "description": "静止/急刹", "default": "stationary"},
                             "distance": {"type": "number", "description": "前后车距(米)", "default": 25.0},
                             "map_name": {"type": "string", "description": "可选，指定地图", "default": None}
@@ -4985,6 +5485,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "direction": {"type": "string", "enum": ["left", "right"], "description": "切入方向", "default": "left"},
                             "map_name": {"type": "string", "description": "可选，指定地图", "default": None}
                         },
@@ -5000,6 +5503,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "map_name": {"type": "string", "description": "可选，指定地图", "default": None}
                         },
                         "required": []
@@ -5014,6 +5520,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "crosser": {"type": "string", "enum": ["pedestrian", "vehicle", "bicycle"], "description": "横穿对象", "default": "pedestrian"},
                             "map_name": {"type": "string", "description": "可选，指定地图", "default": None}
                         },
@@ -5029,6 +5538,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "offset_ratio": {"type": "number", "description": "侵入比例0~0.5", "default": 0.35},
                             "map_name": {"type": "string", "description": "可选，指定地图", "default": None}
                         },
@@ -5044,6 +5556,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "speed": {"type": "number", "description": "逆行速度(m/s)", "default": 8.0},
                             "map_name": {"type": "string", "description": "可选，指定地图", "default": None}
                         },
@@ -5059,6 +5574,9 @@ class FastMCPGitHubAssistant:
                     "parameters": {
                         "type": "object",
                         "properties": {
+                            "reference_id": {"type": "integer", "description": "参照物actor ID（如某车辆的ID）。指定后优先在该actor相对位置生成/布设，不指定则按默认位置", "default": None},
+                            "relative_distance": {"type": "number", "description": "与参照物的距离（米），默认10", "default": None},
+                            "relative_angle": {"type": "number", "description": "相对参照物朝向的角度（度，0=正前方，90=左侧，-90=右侧，180=后方）", "default": 0.0},
                             "map_name": {"type": "string", "description": "可选，指定地图", "default": None}
                         },
                         "required": []
@@ -5146,7 +5664,10 @@ class FastMCPGitHubAssistant:
                 app_logger.info(f"spawn_bicycle参数详情: {arguments}")
                 result = await spawn_bicycle_impl(
                     query=arguments["query"],
-                    count=int(arguments.get("count", 1))
+                    count=int(arguments.get("count", 1)),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {
                     "success": True,
@@ -5157,7 +5678,10 @@ class FastMCPGitHubAssistant:
                 app_logger.info(f"spawn_motorcycle参数详情: {arguments}")
                 result = await spawn_motorcycle_impl(
                     query=arguments["query"],
-                    count=int(arguments.get("count", 1))
+                    count=int(arguments.get("count", 1)),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {
                     "success": True,
@@ -5169,7 +5693,10 @@ class FastMCPGitHubAssistant:
                 result = await spawn_prop_impl(
                     query=arguments["query"],
                     count=int(arguments.get("count", 1)),
-                    target_id=arguments.get("target_id")
+                    target_id=arguments.get("target_id"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle")
                 )
                 return {
                     "success": True,
@@ -5179,7 +5706,10 @@ class FastMCPGitHubAssistant:
             elif function_name == "spawn_overturned_vehicle":
                 app_logger.info(f"spawn_overturned_vehicle参数详情: {arguments}")
                 result = await spawn_overturned_vehicle_impl(
-                    vehicle_type=arguments.get("vehicle_type", "model3")
+                    vehicle_type=arguments.get("vehicle_type", "model3"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {
                     "success": True,
@@ -5225,10 +5755,11 @@ class FastMCPGitHubAssistant:
                     "data": result
                 }
 
-            elif function_name == "switch_view_mode":
+            elif function_name in ("switch_view", "switch_view_mode"):
+                # schema 注册名是 switch_view，此处兼容两个名字；参数名为 target_actor_id
                 result = await carla_client.switch_view_mode(
                     arguments.get("view_mode", "third_person"),
-                    arguments.get("target_id")
+                    arguments.get("target_actor_id", arguments.get("target_id"))
                 )
                 return {
                     "success": True,
@@ -5323,7 +5854,10 @@ class FastMCPGitHubAssistant:
                 result = await scenario_highway_ramp_impl(
                     ramp_type=arguments.get("ramp_type", "on"),
                     vehicle_count=int(arguments.get("vehicle_count", 4)),
-                    map_name=arguments.get("map_name")
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {
                     "success": True,
@@ -5333,7 +5867,10 @@ class FastMCPGitHubAssistant:
             elif function_name == "scenario_lane_merge":
                 result = await scenario_lane_merge_impl(
                     vehicle_count=int(arguments.get("vehicle_count", 4)),
-                    map_name=arguments.get("map_name")
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {
                     "success": True,
@@ -5343,7 +5880,10 @@ class FastMCPGitHubAssistant:
             elif function_name == "scenario_diverge_merge":
                 result = await scenario_diverge_merge_impl(
                     vehicle_count=int(arguments.get("vehicle_count", 4)),
-                    map_name=arguments.get("map_name")
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {
                     "success": True,
@@ -5353,7 +5893,10 @@ class FastMCPGitHubAssistant:
             elif function_name == "scenario_side_road":
                 result = await scenario_side_road_impl(
                     vehicle_count=int(arguments.get("vehicle_count", 4)),
-                    map_name=arguments.get("map_name")
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {
                     "success": True,
@@ -5371,21 +5914,30 @@ class FastMCPGitHubAssistant:
                 result = await scenario_junction_light_impl(
                     junction_shape=arguments.get("junction_shape", "any"),
                     vehicle_count=int(arguments.get("vehicle_count", 4)),
-                    map_name=arguments.get("map_name")
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {"success": True, "data": result}
 
             elif function_name == "scenario_tunnel":
                 result = await scenario_tunnel_impl(
                     vehicle_count=int(arguments.get("vehicle_count", 4)),
-                    map_name=arguments.get("map_name")
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {"success": True, "data": result}
 
             elif function_name == "scenario_roundabout":
                 result = await scenario_roundabout_impl(
                     vehicle_count=int(arguments.get("vehicle_count", 5)),
-                    map_name=arguments.get("map_name")
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {"success": True, "data": result}
 
@@ -5401,7 +5953,10 @@ class FastMCPGitHubAssistant:
                 result = await scenario_two_wheeler_impl(
                     vehicle_type=arguments.get("vehicle_type", "bicycle"),
                     state=arguments.get("state", "stand"),
-                    count=int(arguments.get("count", 2))
+                    count=int(arguments.get("count", 2)),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {"success": True, "data": result}
 
@@ -5409,14 +5964,20 @@ class FastMCPGitHubAssistant:
                 result = await spawn_special_vehicle_impl(
                     vehicle_type=arguments.get("vehicle_type", "ambulance"),
                     moving=bool(arguments.get("moving", True)),
-                    count=int(arguments.get("count", 1))
+                    count=int(arguments.get("count", 1)),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {"success": True, "data": result}
 
             elif function_name == "scenario_officer":
                 result = await scenario_officer_impl(
                     element=arguments.get("element", "traffic_police"),
-                    with_companion=bool(arguments.get("with_companion", False))
+                    with_companion=bool(arguments.get("with_companion", False)),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {"success": True, "data": result}
 
@@ -5429,14 +5990,22 @@ class FastMCPGitHubAssistant:
                 return {"success": True, "data": result}
 
             elif function_name == "scenario_backlight":
-                result = await scenario_backlight_impl(map_name=arguments.get("map_name"))
+                result = await scenario_backlight_impl(
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
+                )
                 return {"success": True, "data": result}
 
             elif function_name == "spawn_rollover_vehicle":
                 result = await spawn_rollover_vehicle_impl(
                     vehicle_type=arguments.get("vehicle_type", "car"),
                     rollover=arguments.get("rollover", "side"),
-                    map_name=arguments.get("map_name")
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {"success": True, "data": result}
 
@@ -5444,44 +6013,69 @@ class FastMCPGitHubAssistant:
                 result = await scenario_lead_vehicle_impl(
                     mode=arguments.get("mode", "stationary"),
                     distance=float(arguments.get("distance", 25.0)),
-                    map_name=arguments.get("map_name")
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {"success": True, "data": result}
 
             elif function_name == "scenario_cut_in":
                 result = await scenario_cut_in_impl(
                     direction=arguments.get("direction", "left"),
-                    map_name=arguments.get("map_name")
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {"success": True, "data": result}
 
             elif function_name == "scenario_lead_disappear":
-                result = await scenario_lead_disappear_impl(map_name=arguments.get("map_name"))
+                result = await scenario_lead_disappear_impl(
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
+                )
                 return {"success": True, "data": result}
 
             elif function_name == "scenario_crossing_hazard":
                 result = await scenario_crossing_hazard_impl(
                     crosser=arguments.get("crosser", "pedestrian"),
-                    map_name=arguments.get("map_name")
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {"success": True, "data": result}
 
             elif function_name == "scenario_low_overlap":
                 result = await scenario_low_overlap_impl(
                     offset_ratio=float(arguments.get("offset_ratio", 0.35)),
-                    map_name=arguments.get("map_name")
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {"success": True, "data": result}
 
             elif function_name == "scenario_wrong_way":
                 result = await scenario_wrong_way_impl(
                     speed=float(arguments.get("speed", 8.0)),
-                    map_name=arguments.get("map_name")
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
                 )
                 return {"success": True, "data": result}
 
             elif function_name == "scenario_unprotected_turn":
-                result = await scenario_unprotected_turn_impl(map_name=arguments.get("map_name"))
+                result = await scenario_unprotected_turn_impl(
+                    map_name=arguments.get("map_name"),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance"),
+                    relative_angle=arguments.get("relative_angle", 0.0)
+                )
                 return {"success": True, "data": result}
 
             else:
@@ -6027,6 +6621,20 @@ CARLA仿真功能：
 36. scenario_wrong_way - 逆行场景，参数：speed(默认8), map_name(可选)
 37. scenario_unprotected_turn - 路口无保护通行场景，参数：map_name(可选)
 
+
+参照物定位（重要）：
+- 绝大多数生成类和场景类工具都支持指定位置，通用参数：reference_id(参照物actor ID，如某车辆的ID)、relative_distance(距离米数，默认10)、relative_angle(角度，0=参照物正前方，90=左侧，-90=右侧，180=后方)
+- 适用工具：spawn_bicycle, spawn_motorcycle, spawn_prop, spawn_overturned_vehicle, spawn_rollover_vehicle, spawn_special_vehicle, 以及全部 scenario_* 场景工具
+- 当用户说"在车辆ID xxx前方/后方/旁边X米生成/放置/形成..."时，必须提取参照物ID、距离、方向，换算成 relative_angle（前方=0，后方=180，左侧=90，右侧=-90）并传入对应工具
+- 示例指令：
+  - "在ID 206前方5米生成一辆山地自行车" -> spawn_bicycle(query="crossbike", count=1, reference_id=206, relative_distance=5, relative_angle=0)
+  - "在ID 206前方10米来一辆川崎忍者摩托车" -> spawn_motorcycle(query="ninja", count=1, reference_id=206, relative_distance=10, relative_angle=0)
+  - "在车辆197前方30米生成一辆仰翻汽车" -> spawn_overturned_vehicle(vehicle_type="model3", reference_id=197, relative_distance=30, relative_angle=0)
+  - "在ID 206前方10米生成一辆警车" -> spawn_special_vehicle(vehicle_type="police", reference_id=206, relative_distance=10, relative_angle=0)
+  - "在ID 32的后方放3个施工锥" -> spawn_prop(query="cone", count=3, reference_id=32, relative_distance=5, relative_angle=180)
+  - "在车辆id28前方20米形成前车消失场景" -> scenario_lead_disappear(reference_id=28, relative_distance=20, relative_angle=0)
+- spawn_prop 兼容旧参数 target_id（固定放置在其后方5米），新指令请优先使用 reference_id+relative_angle=180 的方式
+- 如果参照物ID不存在，工具会忽略定位参数并在返回中说明，不会中断执行
 
 CARLA相关：
 - 当用户提到"连接"、"服务器"、"CARLA"等明确要求连接时，使用connect_carla

@@ -317,7 +317,8 @@ class CarlaClient:
                     anchor_bp = blueprint_library.find('vehicle.bh.crossbike')
                 wp = self.world.get_map().get_waypoint(
                     anchor_loc, project_to_road=True, lane_type=carla.LaneType.Driving)
-                spawn_tf = wp.transform if wp else carla.Transform(anchor_loc, carla.Rotation())
+                spawn_tf = self._lifted_transform(wp.transform) if wp else self._lifted_transform(
+                    carla.Transform(anchor_loc, carla.Rotation()))
                 bicycle = self.world.try_spawn_actor(anchor_bp, spawn_tf)
                 if bicycle:
                     self.actors.append(bicycle)
@@ -416,7 +417,8 @@ class CarlaClient:
                     anchor_bp = blueprint_library.find('vehicle.kawasaki.ninja')
                 wp = self.world.get_map().get_waypoint(
                     anchor_loc, project_to_road=True, lane_type=carla.LaneType.Driving)
-                spawn_tf = wp.transform if wp else carla.Transform(anchor_loc, carla.Rotation())
+                spawn_tf = self._lifted_transform(wp.transform) if wp else self._lifted_transform(
+                    carla.Transform(anchor_loc, carla.Rotation()))
                 motorcycle = self.world.try_spawn_actor(anchor_bp, spawn_tf)
                 if motorcycle:
                     self.actors.append(motorcycle)
@@ -1293,7 +1295,7 @@ class CarlaClient:
             if blueprint.has_attribute("color"):
                 blueprint.set_attribute("color", f"{random.randint(0,255)},{random.randint(0,255)},{random.randint(0,255)}")
             try:
-                actor = self.world.try_spawn_actor(blueprint, wp.transform)
+                actor = self.world.try_spawn_actor(blueprint, self._lifted_transform(wp.transform))
             except Exception as e:
                 app_logger.warning(f"⚠️ [场景{tag}] 生成异常: {e}")
                 continue
@@ -1342,6 +1344,14 @@ class CarlaClient:
             if d < best_d:
                 best, best_d = c, d
         return best
+
+    @staticmethod
+    def _lifted_transform(transform, dz=0.3):
+        """抬高spawn点z坐标。实测CARLA在异步模式下要求spawn位置略高于路面，
+        紧贴车道中心z的spawn会被全部拒绝（try_spawn_actor返回None）；
+        有物理的actor落地后自然沉降，不影响最终位置。"""
+        loc = transform.location
+        return carla.Transform(carla.Location(loc.x, loc.y, loc.z + dz), transform.rotation)
 
     async def _ensure_map(self, map_name):
         """切换到指定地图（仅在本进程尚未使用过Traffic Manager时安全）。
@@ -2110,7 +2120,7 @@ class CarlaClient:
                        for a in self.world.get_actors().filter("vehicle.*")):
                     continue
                 try:
-                    actor = self.world.try_spawn_actor(bp, wp.transform)
+                    actor = self.world.try_spawn_actor(bp, self._lifted_transform(wp.transform))
                 except Exception:
                     actor = None
                 if actor:
@@ -2174,7 +2184,7 @@ class CarlaClient:
                        for a in self.world.get_actors().filter("vehicle.*")):
                     continue
                 try:
-                    actor = self.world.try_spawn_actor(blueprint, wp.transform)
+                    actor = self.world.try_spawn_actor(blueprint, self._lifted_transform(wp.transform))
                 except Exception:
                     actor = None
                 if actor:
@@ -2256,7 +2266,8 @@ class CarlaClient:
                     sidewalk_wp = self.world.get_map().get_waypoint(
                         anchor_loc, project_to_road=True, lane_type=carla.LaneType.Sidewalk)
                     try_loc = sidewalk_wp.transform.location if sidewalk_wp else anchor_loc
-                    walker = self.world.try_spawn_actor(bp, carla.Transform(try_loc))
+                    walker = self.world.try_spawn_actor(bp, carla.Transform(
+                        carla.Location(try_loc.x, try_loc.y, try_loc.z + 0.3)))
                     if walker:
                         loc = try_loc
                         app_logger.info(f"♿ [锚点定位] 轮椅行人生成在 ({try_loc.x:.1f}, {try_loc.y:.1f})")
@@ -2297,7 +2308,7 @@ class CarlaClient:
         walker = None
         road_wp = None
         for wp in candidates[:10]:
-            walker = self.world.try_spawn_actor(bp, wp.transform)
+            walker = self.world.try_spawn_actor(bp, self._lifted_transform(wp.transform))
             if walker:
                 road_wp = wp
                 break
@@ -2427,7 +2438,7 @@ class CarlaClient:
             opp_wp = None
         oncoming = None
         if opp_wp and opp_wp.lane_type == carla.LaneType.Driving:
-            t = opp_wp.transform
+            t = self._lifted_transform(opp_wp.transform)
             t.rotation.yaw = (t.rotation.yaw + 180) % 360
             try:
                 oncoming = self.world.try_spawn_actor(
@@ -2952,7 +2963,7 @@ class CarlaClient:
             wrong_c = None
             for _bp in random.sample(bps, min(4, len(bps))):
                 try:
-                    wrong_c = self.world.try_spawn_actor(_bp, t_c)
+                    wrong_c = self.world.try_spawn_actor(_bp, self._lifted_transform(t_c))
                 except Exception:
                     wrong_c = None
                 if wrong_c:
@@ -3833,10 +3844,13 @@ class CarlaClient:
         elif self.view_target:
             target_actor = self.view_target
         elif self.actors:
+            # 自动选取最近生成的可跟随对象（车辆/行人/道具均可跟随，
+            # 仅排除控制器与传感器）
             for actor in reversed(self.actors):
-                if 'vehicle' in actor.type_id or 'walker' in actor.type_id:
-                    target_actor = actor
-                    break
+                if 'controller' in actor.type_id or 'sensor' in actor.type_id:
+                    continue
+                target_actor = actor
+                break
 
         if target_actor:
             self.view_target = target_actor
@@ -5741,10 +5755,11 @@ class FastMCPGitHubAssistant:
                     "data": result
                 }
 
-            elif function_name == "switch_view_mode":
+            elif function_name in ("switch_view", "switch_view_mode"):
+                # schema 注册名是 switch_view，此处兼容两个名字；参数名为 target_actor_id
                 result = await carla_client.switch_view_mode(
                     arguments.get("view_mode", "third_person"),
-                    arguments.get("target_id")
+                    arguments.get("target_actor_id", arguments.get("target_id"))
                 )
                 return {
                     "success": True,

@@ -24,4 +24,8 @@ loguru>=0.7.2
 # Type hints support
 typing-extensions>=4.8.0 
 
+# 场景生成 2.0：OpenSCENARIO/OpenDRIVE 对象模型构造与 XSD 校验
+scenariogeneration>=0.16.0
+lxml>=5.0.0
+
 carla==0.9.16

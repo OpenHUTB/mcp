@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+
+<html class="writer-html5" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="IE=edge" http-equiv="X-UA-Compatible"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="../img/favicon.ico" rel="shortcut icon"/>
+<title>mkdocs简介 - OpenHUTB 文档模板</title>
+<link href="../css/theme.css" rel="stylesheet"/>
+<link href="../css/theme_extra.css" rel="stylesheet"/>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" rel="stylesheet"/>
+<link href="../extra.css" rel="stylesheet"/>
+<script>
+        // Current page data
+        var mkdocs_page_name = "mkdocs\u7b80\u4ecb";
+        var mkdocs_page_input_path = "mkdocs.md";
+        var mkdocs_page_url = null;
+      </script>
+<!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+</head>
+<body class="wy-body-for-nav" role="document">
+<div class="wy-grid-for-nav">
+<nav class="wy-nav-side stickynav" data-toggle="wy-nav-shift">
+<div class="wy-side-scroll">
+<div class="wy-side-nav-search">
+<a class="icon icon-home" href=".."> OpenHUTB 文档模板
+        </a><div role="search">
+<form action="../search.html" class="wy-form" id="rtd-search-form" method="get">
+<input aria-label="Search docs" name="q" placeholder="搜索文档" title="Type search term here" type="text"/>
+</form>
+</div>
+</div>
+<div aria-label="Navigation menu" class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+</li>
+</ul>
+<ul class="current">
+<li class="toctree-l1 current"><a class="reference internal current" href="#">mkdocs简介</a>
+<ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="#readthedocs-主题">readthedocs 主题</a>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+</nav>
+<section class="wy-nav-content-wrap" data-toggle="wy-nav-shift">
+<nav aria-label="Mobile navigation menu" class="wy-nav-top" role="navigation">
+<i class="fa fa-bars" data-toggle="wy-nav-top"></i>
+<a href="..">OpenHUTB 文档模板</a>
+</nav>
+<div class="wy-nav-content">
+<div class="rst-content"><div aria-label="breadcrumbs navigation" role="navigation">
+<ul class="wy-breadcrumbs">
+<li><a aria-label="Docs" class="icon icon-home" href=".."></a></li>
+<li class="breadcrumb-item active">mkdocs简介</li>
+<li class="wy-breadcrumbs-aside">
+<a href="https://github.com/OpenHUTB/template/edit/master/docs/mkdocs.md"> 编辑页面</a>
+</li>
+</ul>
+<hr/>
+</div>
+<div class="document" itemscope="itemscope" itemtype="http://schema.org/Article" role="main">
+<div class="section" itemprop="articleBody">
+<div><h1 id="mkdocs简介">mkdocs简介</h1>
+<h2 id="readthedocs-主题">readthedocs 主题</h2>
+<p>该主题是 OpenHUTB 文档默认主题，即该页面所看到的效果。</p>
+<p>要选择主题，请在 mkdocs.yml 配置文件中设置主题配置选项。</p>
+<div class="highlight"><pre><span></span><code>theme:
+  name: readthedocs
+</code></pre></div>
+<p>该主题是 OpenHUTB 文档默认主题，即该页面所看到的效果。
+这也是 mkdocs 仓库的衍生版，提供的功能集与其父主题相同，且均受到限制。与父主题一样，它也仅支持两级导航。</p>
+<p>除了默认的主题配置选项外，<code>readthedocs</code> 主题还支持以下选项：</p>
+<ul>
+<li>
+<p><strong><code>highlightjs</code></strong>：启用使用 <a href="https://highlightjs.org/">highlight.js</a> JavaScript 库对代码块中的源代码进行高亮显示。默认值：<code>True</code>。</p>
+</li>
+<li>
+<p><strong><code>hljs_languages</code></strong>：highlight.js 默认仅支持 23 种常用语言。在此处列出其他语言以添加支持。</p>
+<div class="highlight"><pre><span></span><code>theme:
+  name: readthedocs
+  highlightjs: true
+  hljs_languages:
+      - yaml
+      - rust
+</code></pre></div>
+</li>
+<li>
+<p><strong><code>analytics</code></strong>：定义分析服务的配置选项。</p>
+<ul>
+<li>
+<p><code>gtag</code>：要启用 Google Analytics（分析），请将其设置为 Google Analytics（分析）v4 跟踪 ID，该 ID 使用 <code>G-</code> 格式。请参阅 Google 文档，了解<a href="https://support.google.com/analytics/answer/9304153?hl=en&amp;ref_topic=9303319">如何为网站和/或应用设置 Analytics（分析）（GA4）</a>或<a href="https://support.google.com/analytics/answer/9744165?hl=en&amp;ref_topic=9303319">升级到 Google Analytics（分析）4 媒体资源</a>。
+</p><div class="highlight"><pre><span></span><code>theme:
+  name: readthedocs
+  analytics:
+    gtag: G-ABC123
+</code></pre></div>
+当设置为默认值（null）时，Google Analytics（分析）功能将被禁用。
+</li>
+<li>
+<p><code>anonymize_ip</code>：要为 Google Analytics（分析）启用匿名 IP 地址，请将其设置为 True。默认值：<code>False</code>。</p>
+</li>
+</ul>
+</li>
+<li>
+<p><strong><code>include_homepage_in_sidebar</code></strong>: 在侧边栏菜单中显示首页。由于 MkDocs 要求在导航（<code>nav</code>）配置选项中列出首页，因此此设置允许将首页包含在侧边栏中或从侧边栏中排除。请注意，网站名称/徽标始终链接到首页。默认值：<code>True</code>。</p>
+</li>
+<li>
+<p><strong><code>prev_next_buttons_location</code></strong>: 选项包括：底部（<code>bottom</code>）、顶部（<code>top</code>）、顶部和底部（ <code>both</code>）、或都不显示（<code>none</code>）。根据选项显示“下一页”和“上一页”按钮。默认值：底部（<code>bottom</code>）。 </p>
+</li>
+<li>
+<p><strong><code>navigation_depth</code></strong>: 侧边栏导航树的最大深度。默认值：<code>4</code>。</p>
+</li>
+<li>
+<p><strong><code>collapse_navigation</code></strong>: 仅在当前页面的侧边栏中包含页面章节标题。默认值：<code>True</code>。</p>
+</li>
+<li>
+<p><strong><code>titles_only</code></strong>: 侧边栏仅包含页面标题，不包含所有页面的所有章节标题。默认值：<code>False</code>（最好有右边的页面内导航才启用）。</p>
+</li>
+<li>
+<p><strong><code>sticky_navigation</code></strong>: 如果为 True，则侧边栏会随着页面滚动而滚动。默认值：<code>True</code>。</p>
+</li>
+<li>
+<p><strong><code>locale</code></strong>：用于构建主题的语言/地区设置。如果您的语言/地区尚不受支持，则会回退到默认设置。</p>
+<p>此主题支持以下语言/地区：</p>
+<ul>
+<li><code>en</code>: 英语（默认）</li>
+<li>(查看现有目录列表 <code>mkdocs/themes/readthedocs/locales/*/</code>)</li>
+</ul>
+<p>有关更多信息，请参阅[主题本地化]指南。</p>
+</li>
+<li>
+<p><strong><code>logo</code></strong>: 要在项目中使用徽标而不是纯文本 <code>site_name</code>，请将此变量设置为图像的位置。默认值：<code>null</code>。 </p>
+</li>
+</ul></div>
+</div>
+</div><footer>
+<div aria-label="Footer Navigation" class="rst-footer-buttons" role="navigation">
+<a class="btn btn-neutral float-left" href=".." title="首页"><span class="icon icon-circle-arrow-left"></span> 前一页</a>
+</div>
+<hr/>
+<div role="contentinfo">
+<!-- Copyright etc -->
+<p>OpenHUTB 版权所有 © 2026</p>
+</div>
+</footer>
+</div>
+</div>
+</section>
+</div>
+<div aria-label="Versions" class="rst-versions" role="note">
+<span class="rst-current-version" data-toggle="rst-current-version">
+<span>
+<a href="https://github.com/OpenHUTB/template" style="color: #fcfcfc">OpenHUTB</a>
+</span>
+<span><a href=".." style="color: #fcfcfc">« 前一页</a></span>
+</span>
+</div>
+<script src="../js/jquery-3.6.0.min.js"></script>
+<script>var base_url = "..";</script>
+<script src="../js/theme_extra.js"></script>
+<script src="../js/theme.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/raphael/2.2.7/raphael.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-sequence-diagrams/1.0.6/sequence-diagram-min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/flowchart/1.6.5/flowchart.min.js"></script>
+<script src="../js/umlconvert.js"></script>
+<script src="../search/main.js"></script>
+<script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+</body>
+</html>

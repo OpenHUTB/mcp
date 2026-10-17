@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+
+<html class="writer-html5" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="IE=edge" http-equiv="X-UA-Compatible"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/><meta content="None" name="description"/>
+<link href="img/favicon.ico" rel="shortcut icon"/>
+<title>OpenHUTB 文档模板</title>
+<link href="css/theme.css" rel="stylesheet"/>
+<link href="css/theme_extra.css" rel="stylesheet"/>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" rel="stylesheet"/>
+<link href="extra.css" rel="stylesheet"/>
+<script>
+        // Current page data
+        var mkdocs_page_name = "\u9996\u9875";
+        var mkdocs_page_input_path = "index.md";
+        var mkdocs_page_url = null;
+      </script>
+<!--[if lt IE 9]>
+      <script src="js/html5shiv.min.js"></script>
+    <![endif]-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+</head>
+<body class="wy-body-for-nav" role="document">
+<div class="wy-grid-for-nav">
+<nav class="wy-nav-side stickynav" data-toggle="wy-nav-shift">
+<div class="wy-side-scroll">
+<div class="wy-side-nav-search">
+<a class="icon icon-home" href="."> OpenHUTB 文档模板
+        </a><div role="search">
+<form action="./search.html" class="wy-form" id="rtd-search-form" method="get">
+<input aria-label="Search docs" name="q" placeholder="搜索文档" title="Type search term here" type="text"/>
+</form>
+</div>
+</div>
+<div aria-label="Navigation menu" class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation">
+<ul class="current">
+<li class="toctree-l1 current"><a class="reference internal current" href="#">首页</a>
+<ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="#1-简介">1. 简介 </a>
+<ul>
+<li class="toctree-l3"><a class="reference internal" href="#11-mkdocs简介">1.1 mkdocs简介 </a>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#2-表格">2. 表格 </a>
+<ul>
+<li class="toctree-l3"><a class="reference internal" href="#普通表格">普通表格</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#跨越多行和多列">跨越多行和多列</a>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#参考文献">参考文献</a>
+</li>
+</ul>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="mkdocs/">mkdocs简介</a>
+</li>
+</ul>
+</div>
+</div>
+</nav>
+<section class="wy-nav-content-wrap" data-toggle="wy-nav-shift">
+<nav aria-label="Mobile navigation menu" class="wy-nav-top" role="navigation">
+<i class="fa fa-bars" data-toggle="wy-nav-top"></i>
+<a href=".">OpenHUTB 文档模板</a>
+</nav>
+<div class="wy-nav-content">
+<div class="rst-content"><div aria-label="breadcrumbs navigation" role="navigation">
+<ul class="wy-breadcrumbs">
+<li><a aria-label="Docs" class="icon icon-home" href="."></a></li>
+<li class="breadcrumb-item active">首页</li>
+<li class="wy-breadcrumbs-aside">
+<a href="https://github.com/OpenHUTB/template/edit/master/docs/index.md"> 编辑页面</a>
+</li>
+</ul>
+<hr/>
+</div>
+<div class="document" itemscope="itemscope" itemtype="http://schema.org/Article" role="main">
+<div class="section" itemprop="articleBody">
+<div><h1 id="openhutb-page-模板"><a href="https://github.com/OpenHUTB/template">OpenHUTB Page 模板</a></h1>
+<p>欢迎使用 OpenHUTB 的 Github Page 模板文档 <sup id="fnref:he2024dynsyn"><a class="footnote-ref" href="#fn:he2024dynsyn">1</a></sup>。</p>
+<ul>
+<li><a href="#introduction">简介</a><ul>
+<li><a href="#mkdocs">mkdocs简介</a></li>
+<li><a href="#videos">播放视频</a></li>
+</ul>
+</li>
+<li><a href="#table">表格</a><ul>
+<li><a href="#%E6%99%AE%E9%80%9A%E8%A1%A8%E6%A0%BC">普通表格</a></li>
+<li><a href="#%E8%B7%A8%E8%B6%8A%E5%A4%9A%E8%A1%8C%E5%92%8C%E5%A4%9A%E5%88%97">跨越多行和多列</a></li>
+</ul>
+</li>
+</ul>
+<hr/>
+<h2 id="1-简介">1. 简介 <span id="introduction"></span></h2>
+<h3 id="11-mkdocs简介">1.1 <a href="mkdocs/"><strong>mkdocs简介</strong></a> <span id="mkdocs"></span></h3>
+<ul>
+<li>mermaid 图表渲染支持</li>
+</ul>
+<div class="mermaid">graph LR
+    K[键盘输入] --&gt;|pynput 监听| T[drone_ros_teleop 键盘发布节点]
+    T --&gt;|/drone/cmd_vel Twist 10 Hz| B[drone_ros_node 桥接控制节点]
+    B --&gt;|AirSim RPC 41451| A[Windows 宿主机 AirSim 模拟器]
+</div>
+<ul>
+<li>
+<p><a href="videos/">播放视频</a> <span id="videos"></span></p>
+</li>
+<li>
+<p>显示图片 </p>
+</li>
+</ul>
+<div class="highlight"><pre><span></span><code>![](./img/action_page.jpg)
+</code></pre></div>
+<p><img alt="" src="img/action_page.jpg"/></p>
+<h2 id="2-表格">2. 表格 <span id="table"></span></h2>
+<h3 id="普通表格">普通表格</h3>
+<table>
+<thead>
+<tr>
+<th>命令</th>
+<th>描述</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>make help</code></td>
+<td>打印所有可用的命令。</td>
+</tr>
+</tbody>
+</table>
+<h3 id="跨越多行和多列">跨越多行和多列</h3>
+<p></p><div class="highlight"><pre><span></span><code>+---------+----------+------+
+| 控制方案|    值    | 动作 |
++=========+==========+======+
+|         |   `[0]`  |向前走|
++         +----------+------+
+|  离散   |   `[1]`  |向后走|
++  (`0`)  +----------+------+
+|         |  `[2]`   | 右转 |
++         +----------+------+
+|         |   `[3]`  | 左转 |
++---------+----------+------+
+|   连续  | `forward_speed`,|
+|  (`1`)  |   `rot_speed`   |
++---------+----------+------+
+</code></pre></div>
+渲染为：
+<table>
+<thead>
+<tr>
+<th colspan="1" rowspan="1">
+<p>控制方案</p>
+</th>
+<th colspan="1" rowspan="1">
+<p>值</p>
+</th>
+<th colspan="1" rowspan="1">
+<p>动作</p>
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td colspan="1" rowspan="4">
+<p>离散<br/>
+(<code>0</code>)<br/>
+<br/>
+<br/>
+</p>
+</td>
+<td colspan="1" rowspan="1">
+<p><code>[0]</code></p>
+</td>
+<td colspan="1" rowspan="1">
+<p>向前走</p>
+</td>
+</tr>
+<tr>
+<td colspan="1" rowspan="1">
+<p><code>[1]</code></p>
+</td>
+<td colspan="1" rowspan="1">
+<p>向后走</p>
+</td>
+</tr>
+<tr>
+<td colspan="1" rowspan="1">
+<p><code>[2]</code></p>
+</td>
+<td colspan="1" rowspan="1">
+<p>右转</p>
+</td>
+</tr>
+<tr>
+<td colspan="1" rowspan="1">
+<p><code>[3]</code></p>
+</td>
+<td colspan="1" rowspan="1">
+<p>左转</p>
+</td>
+</tr>
+<tr>
+<td colspan="1" rowspan="1">
+<p>连续<br/>
+(<code>1</code>)</p>
+</td>
+<td colspan="2" rowspan="1">
+<p><code>forward_speed</code>,<br/>
+<code>rot_speed</code></p>
+</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code>+-------+----------+------+
+| Table Headings   | Here |
++-------+----------+------+
+| Sub   | Headings | Too  |
++=======+==========+======+
+| cell  | column spanning |
++ spans +----------+------+
+| rows  | normal   | cell |
++-------+----------+------+
+| multi | cells can be    |
+| line  | *formatted*     |
+|       | **paragraphs**  |
+| cells |                 |
+| too   |                 |
++-------+-----------------+
+</code></pre></div>
+<p>渲染为：</p>
+<table>
+<thead>
+<tr>
+<th colspan="2" rowspan="1">
+<p>Table Headings</p>
+</th>
+<th colspan="1" rowspan="1">
+<p>Here</p>
+</th>
+</tr>
+<tr>
+<th colspan="1" rowspan="1">
+<p>Sub</p>
+</th>
+<th colspan="1" rowspan="1">
+<p>Headings</p>
+</th>
+<th colspan="1" rowspan="1">
+<p>Too</p>
+</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td colspan="1" rowspan="2">
+<p>cell<br/>
+spans<br/>
+rows</p>
+</td>
+<td colspan="2" rowspan="1">
+<p>column spanning</p>
+</td>
+</tr>
+<tr>
+<td colspan="1" rowspan="1">
+<p>normal</p>
+</td>
+<td colspan="1" rowspan="1">
+<p>cell</p>
+</td>
+</tr>
+<tr>
+<td colspan="1" rowspan="1">
+<p>multi<br/>
+line<br/>
+<br/>
+cells<br/>
+too</p>
+</td>
+<td colspan="2" rowspan="1">
+<p>cells can be<br/>
+<em>formatted</em><br/>
+<strong>paragraphs</strong><br/>
+<br/>
+</p>
+</td>
+</tr>
+</tbody>
+</table>
+<hr/>
+<p>如果对文档中的任何问题可以在 <a href="https://github.com/OpenHUTB/templte">本文档的源码仓库</a> 中的 <a href="https://github.com/OpenHUTB/templte/issues">问题</a> 页面讨论或者提交 <a href="https://github.com/OpenHUTB/.github/blob/master/CONTRIBUTING.md">拉取请求</a> 直接修改文档。</p>
+<h2 id="参考文献">参考文献</h2>
+<div class="footnote">
+<hr/>
+<ol>
+<li id="fn:he2024dynsyn">
+<p>He, K., Zuo, C., Ma, C. &amp; Sui, Y. DynSyn: Dynamical synergistic representation for efficient learning and control in overactuated embodied systems. <em>arXiv preprint arXiv:2407.11472</em> (2024). <a class="footnote-backref" href="#fnref:he2024dynsyn" title="Jump back to footnote 1 in the text">↩</a></p>
+</li>
+</ol>
+</div></div>
+</div>
+</div><footer>
+<div aria-label="Footer Navigation" class="rst-footer-buttons" role="navigation">
+<a class="btn btn-neutral float-right" href="mkdocs/" title="mkdocs简介">后一页 <span class="icon icon-circle-arrow-right"></span></a>
+</div>
+<hr>
+<div role="contentinfo">
+<!-- Copyright etc -->
+<p>OpenHUTB 版权所有 © 2026</p>
+</div>
+</hr></footer>
+</div>
+</div>
+</section>
+</div>
+<div aria-label="Versions" class="rst-versions" role="note">
+<span class="rst-current-version" data-toggle="rst-current-version">
+<span>
+<a href="https://github.com/OpenHUTB/template" style="color: #fcfcfc">OpenHUTB</a>
+</span>
+<span><a href="mkdocs/" style="color: #fcfcfc">后一页 »</a></span>
+</span>
+</div>
+<script src="js/jquery-3.6.0.min.js"></script>
+<script>var base_url = ".";</script>
+<script src="js/theme_extra.js"></script>
+<script src="js/theme.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/raphael/2.2.7/raphael.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-sequence-diagrams/1.0.6/sequence-diagram-min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/flowchart/1.6.5/flowchart.min.js"></script>
+<script src="js/umlconvert.js"></script>
+<script src="search/main.js"></script>
+<script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+<script>mermaid.initialize({});</script></body>
+</html>
+<!--
+MkDocs version : 1.5.9
+Build Date UTC : 2026-10-17 14:22:31.873800+00:00
+-->

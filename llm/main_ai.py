@@ -3445,16 +3445,29 @@ class CarlaClient:
 
     def start_view_follow(self, view_mode, target_actor):
         """启用视角跟随（实际更新逻辑已合并到tick_loop中）
-        
+
         Args:
             view_mode: 视角模式 - third_person, first_person, overhead
             target_actor: 要跟随的目标actor
+
+        Returns:
+            bool: 是否成功启用。target_actor 为空时返回 False ——
+                  跟随必须要有目标，原实现直接访问 target_actor.id 会抛
+                  AttributeError。
         """
+        if target_actor is None:
+            app_logger.error("❌ 视角跟随失败：未指定目标 actor（target_id 为空或该 ID 不存在）")
+            return False
+        if self.world is None:
+            app_logger.error("❌ 未连接到CARLA服务器，无法启用视角跟随")
+            return False
+
         self.is_view_following = True
         self.view_target = target_actor
         self.current_view_mode = view_mode
 
         app_logger.info(f"🎯 视角跟随已启用 - 模式: {view_mode}, 目标: {target_actor.id}")
+        return True
 
     async def stop_view_follow(self):
         """停止视角跟随"""
@@ -4767,6 +4780,382 @@ async def scenario_unprotected_turn(map_name: Optional[str] = None,
                                                 relative_angle=relative_angle)
 
 
+# ============================================================================
+# 场景生成 2.0：基于场景 IR 的参数化批量生成
+#
+# 与原有 scenario_* 的区别：
+#   原 scenario_*  直接往 CARLA 世界 spawn actor，参数硬编码，关掉即失
+#   本组工具       产出可复用的 OpenSCENARIO(.xosc) 文件，参数可采样、可复现
+#
+# 依赖 scenariogeneration，故全部采用延迟导入，避免缺失时影响服务启动。
+# ============================================================================
+
+def _scenario_src_dir() -> str:
+    return str(Path(__file__).parent / "src")
+
+
+async def generate_scenario_from_template_impl(
+    template: str = "cut_in",
+    n: int = 1,
+    seed: int = None,
+    out_dir: str = "",
+    params_json: str = "{}",
+) -> str:
+    """按模板批量生成参数化 OpenSCENARIO 场景。"""
+    import json as _json
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    try:
+        from scenario_templates import TEMPLATES, build
+        from scenario_batch import generate_batch
+    except ImportError as e:
+        return ("❌ 缺少依赖 scenariogeneration。请先安装：\n"
+                "    pip install scenariogeneration\n"
+                "  原始错误：%s" % e)
+
+    if template not in TEMPLATES:
+        return "❌ 未知模板 `%s`\n可用模板：%s" % (
+            template, ", ".join(sorted(TEMPLATES)))
+
+    if n < 1:
+        return "❌ n 必须 >= 1"
+
+    try:
+        params = _json.loads(params_json) if params_json else {}
+    except Exception as e:
+        return "❌ params_json 不是合法 JSON：%s" % e
+    if not isinstance(params, dict):
+        return "❌ params_json 必须是 JSON 对象"
+
+    root = out_dir or str(Path(__file__).parent / "output" / "scenarios")
+    os.makedirs(root, exist_ok=True)
+
+    try:
+        man = generate_batch(template, n, root, seed=seed, verbose=False)
+    except Exception as e:
+        app_logger.error("❌ 批量场景生成失败: %s" % e)
+        return "❌ 生成失败：%s: %s" % (type(e).__name__, e)
+
+    lines = [
+        "✅ 场景批量生成完成",
+        "",
+        "📊 批次：%s" % man["batch_id"],
+        "   模板：%s（%s）" % (template, man["template_title"]),
+        "   数量：%d   成功：%d   失败：%d" % (
+            man["count"], man["valid"], man["failed"]),
+        "   seed：%s" % ("未指定" if man["seed"] is None else man["seed"]),
+        "   耗时：%.2f 秒（%.1f 个/秒）" % (
+            man["elapsed_seconds"], man["count"] / max(man["elapsed_seconds"], 1e-6)),
+        "   指纹重复：%d" % man["duplicate_fingerprints"],
+        "",
+        "📁 输出目录：%s" % man["out_dir"],
+        "📋 清单：%s" % man["manifest_path"],
+        "",
+        "📄 场景示例：",
+    ]
+    for r in man["scenarios"][:3]:
+        lines.append("   - %s  (seed=%s, %s)" % (
+            r["file"], r["seed"], r["fingerprint"]))
+    if man["count"] > 3:
+        lines.append("   ... 共 %d 个" % man["count"])
+
+    if man["failed"]:
+        lines.append("")
+        lines.append("⚠️ 失败样例：")
+        for r in man["scenarios"]:
+            if r.get("valid") is False:
+                lines.append("   - %s: %s" % (r["file"], "; ".join(r["errors"][:2])))
+                break
+
+    return "\n".join(lines)
+
+
+async def list_scenario_templates_impl() -> str:
+    """列出所有可用的参数化场景模板及其参数空间。"""
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    try:
+        from scenario_templates import list_templates
+    except ImportError as e:
+        return ("❌ 缺少依赖 scenariogeneration。请先安装：\n"
+                "    pip install scenariogeneration\n"
+                "  原始错误：%s" % e)
+
+    tpls = list_templates()
+    lines = ["✅ 可用场景模板（共 %d 个）" % len(tpls), ""]
+    for t in tpls:
+        lines.append("● %s —— %s" % (t["name"], t["title"]))
+        if t["description"]:
+            lines.append("    %s" % t["description"])
+        if t["tags"]:
+            lines.append("    标签：%s" % "、".join(t["tags"]))
+        if t["carla_function"]:
+            lines.append("    对应 CARLA 函数：%s()" % t["carla_function"])
+        ps = []
+        for k, v in t["params"].items():
+            if v["kind"] == "choice":
+                ps.append("%s∈%s" % (k, v["choices"]))
+            elif v["kind"] in ("uniform", "int"):
+                ps.append("%s∈[%g,%g]%s" % (k, v["low"], v["high"], v.get("unit", "")))
+            else:
+                ps.append("%s=%s" % (k, v.get("value")))
+        lines.append("    参数：%s" % "  ".join(ps))
+        lines.append("")
+
+    lines.append("用法：调用 generate_scenario_from_template(template='cut_in', n=50, seed=42)")
+    return "\n".join(lines)
+
+
+async def validate_scenario_impl(file_path: str = "") -> str:
+    """校验单个 .xosc 场景文件（结构层 + 语义层）。"""
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    if not file_path:
+        return "❌ 请提供 file_path"
+
+    p = Path(file_path)
+    if not p.is_absolute():
+        p = Path(__file__).parent / file_path
+    if not p.exists():
+        return "❌ 文件不存在：%s" % p
+
+    try:
+        from scenario_validator import validate
+    except ImportError as e:
+        return ("❌ 缺少依赖 scenariogeneration。请先安装：\n"
+                "    pip install scenariogeneration\n"
+                "  原始错误：%s" % e)
+
+    r = validate(str(p))
+    st = r.get("stats") or {}
+
+    if r["ok"]:
+        return "\n".join([
+            "✅ 校验通过：%s" % p.name,
+            "",
+            "   OSC 版本   ：%s" % st.get("version"),
+            "   实体数     ：%s  %s" % (st.get("entity_count"),
+                                        st.get("entity_names")),
+            "   机动数     ：%s" % st.get("maneuver_count"),
+            "   触发条件数 ：%s" % st.get("condition_count"),
+            "   动作类型   ：%s" % "、".join(st.get("action_types") or []),
+            "   条件类型   ：%s" % "、".join(st.get("condition_types") or []),
+            "   文件大小   ：%s 字节" % st.get("size_bytes"),
+        ])
+
+    lines = ["❌ 校验未通过：%s" % p.name, ""]
+    for e in r.get("errors", []):
+        lines.append("   - %s" % e)
+    for w in r.get("warnings", []):
+        lines.append("   ! %s" % w)
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# OpenDRIVE 路网生成
+#
+# 在此之前，仓库里唯一的 .xodr 产出路径是 generate_sumo_network 调 netconvert
+# 生成的规则网格，无法控制道路几何与车道数变化。本组工具补齐这块。
+# ---------------------------------------------------------------------------
+
+async def generate_rich_xodr_impl(layout: str = "straight",
+                                  params_json: str = "{}",
+                                  out_dir: str = "",
+                                  filename: str = "") -> str:
+    """按布局生成参数化 OpenDRIVE(.xodr) 路网。"""
+    import json as _json
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    try:
+        from road_builder import (LAYOUT_TITLES, RoadBuildError, build,
+                                  DEFAULT_PARAMS, inspect_road, write)
+    except ImportError as e:
+        return ("❌ 缺少依赖 scenariogeneration。请先安装：\n"
+                "    pip install scenariogeneration\n"
+                "  原始错误：%s" % e)
+
+    if layout not in DEFAULT_PARAMS:
+        return "❌ 未知布局 `%s`\n可用布局：%s" % (
+            layout, ", ".join(sorted(DEFAULT_PARAMS)))
+
+    try:
+        params = _json.loads(params_json) if params_json else {}
+    except Exception as e:
+        return "❌ params_json 不是合法 JSON：%s" % e
+    if not isinstance(params, dict):
+        return "❌ params_json 必须是 JSON 对象"
+
+    root = out_dir or str(Path(__file__).parent / "output" / "xodr")
+    os.makedirs(root, exist_ok=True)
+    fname = filename or ("%s.xodr" % layout)
+    if not fname.endswith(".xodr"):
+        fname += ".xodr"
+    path = os.path.join(root, fname)
+
+    try:
+        write(layout, path, params)
+        info = inspect_road(path)
+    except RoadBuildError as e:
+        return "❌ 生成失败：%s" % e
+    except Exception as e:
+        app_logger.error("❌ 路网生成失败: %s" % e)
+        return "❌ 生成失败：%s: %s" % (type(e).__name__, e)
+
+    merged = dict(DEFAULT_PARAMS[layout])
+    merged.update(params)
+
+    lines = [
+        "✅ OpenDRIVE 路网生成成功",
+        "",
+        "📐 布局：%s（%s）" % (layout, LAYOUT_TITLES[layout]),
+        "📁 文件：%s" % path,
+        "📊 大小：%d 字节" % info["size_bytes"],
+        "",
+        "🛣️  结构：%d 条道路，%d 个路口" % (info["road_count"],
+                                            info["junction_count"]),
+        "",
+        "📋 采用参数：",
+    ]
+    for k, v in merged.items():
+        lines.append("   - %s = %s" % (k, v))
+
+    # 车道渐变类布局把剖面展示出来
+    prof = None
+    for r in info["roads"]:
+        if len(r.get("lane_profile", [])) > 1:
+            prof = r["lane_profile"]
+            break
+    if prof:
+        lines.append("")
+        lines.append("🔀 车道数变化：")
+        for x in prof:
+            lines.append("   - s=%-6s 左%d 右%d" % (x["s"], x["left"], x["right"]))
+
+    lines.append("")
+    lines.append("📥 下载链接：<a href=\"/download/%s\" target=\"_blank\">%s</a>"
+                 % (os.path.basename(path), os.path.basename(path)))
+    return "\n".join(lines)
+
+
+async def list_road_layouts_impl() -> str:
+    """列出可用的 OpenDRIVE 路网布局及其默认参数。"""
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    try:
+        from road_builder import LAYOUT_TITLES, list_layouts
+    except ImportError as e:
+        return ("❌ 缺少依赖 scenariogeneration。请先安装：\n"
+                "    pip install scenariogeneration\n"
+                "  原始错误：%s" % e)
+
+    items = list_layouts()
+    lines = ["✅ 可用路网布局（共 %d 种）" % len(items), ""]
+    for x in items:
+        lines.append("● %s —— %s" % (x["name"], x["title"]))
+        lines.append("    默认参数：%s" % ", ".join(
+            "%s=%s" % (k, v) for k, v in x["defaults"].items()))
+        lines.append("")
+    lines.append("用法：generate_rich_xodr(layout='cross_junction', "
+                 "params_json='{\"arm_length\": 100}')")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def generate_rich_xodr(layout: str = "straight", params_json: str = "{}",
+                             out_dir: str = "", filename: str = "") -> str:
+    """按布局生成参数化 OpenDRIVE(.xodr) 路网文件。
+
+    支持 7 种布局：straight(直路)、highway_curve(高速弯道，带缓和曲线)、
+    s_curve(S弯)、cross_junction(十字路口)、t_junction(丁字路口)、
+    on_ramp_merge(匝道合流，车道1→2)、off_ramp_diverge(匝道分流，车道2→1)。
+
+    与 generate_sumo_network 的区别：后者用 netconvert 生成规则网格，
+    本工具可直接控制道路几何（直线/圆弧/缓和曲线）与车道数变化。
+
+    Args:
+        layout: 布局名，见 list_road_layouts
+        params_json: 覆盖默认参数的 JSON 字符串
+        out_dir: 输出目录（留空则用 llm/output/xodr）
+        filename: 输出文件名（留空则用 <layout>.xodr）
+    """
+    return await generate_rich_xodr_impl(layout, params_json, out_dir, filename)
+
+
+@mcp.tool()
+async def list_road_layouts() -> str:
+    """列出可用的 OpenDRIVE 路网布局及其默认参数。"""
+    return await list_road_layouts_impl()
+
+
+@mcp.tool()
+async def generate_scenario_from_template(template: str = "cut_in", n: int = 1,
+                                          seed: int = None, out_dir: str = "",
+                                          params_json: str = "{}") -> str:
+    """按模板批量生成参数化 OpenSCENARIO 场景文件。
+
+    支持参数化采样与 seed 复现，产出 .xosc 文件 + manifest.json 清单。
+    与 scenario_* 系列不同：本工具产出可复用的场景文件，而非直接往 CARLA 生成 actor。
+
+    Args:
+        template: 模板名，如 cut_in / lead_brake / crossing_hazard 等
+        n: 生成数量
+        seed: 随机种子（相同 seed 结果可复现）
+        out_dir: 输出目录（留空则用 llm/output/scenarios）
+        params_json: 覆盖模板默认参数的 JSON 字符串
+    """
+    return await generate_scenario_from_template_impl(template, n, seed,
+                                                      out_dir, params_json)
+
+
+@mcp.tool()
+async def list_scenario_templates() -> str:
+    """列出所有可用的参数化场景模板及其参数空间。"""
+    return await list_scenario_templates_impl()
+
+
+@mcp.tool()
+async def validate_scenario(file_path: str = "") -> str:
+    """校验单个 .xosc 场景文件（结构层解析 + 语义层一致性断言）。"""
+    return await validate_scenario_impl(file_path)
+
+
+def _resolve_actor_by_id(actor_id):
+    """按 ID 解析 CARLA actor。
+
+    视角类工具（set_third_person_view 等）接收的是 actor **对象**，
+    而 LLM 只能给出整数 ID，因此派发前必须做一次解析。
+    解析失败返回 None，由各视角函数自行兜底（多数支持 target_actor=None）。
+    """
+    if actor_id is None:
+        return None
+    if carla_client.world is None:
+        return None
+    try:
+        return carla_client.world.get_actor(int(actor_id))
+    except Exception:
+        return None
+
+
 
 # ============ AI助手类（集成Deepseek AI） ============
 
@@ -5582,6 +5971,191 @@ class FastMCPGitHubAssistant:
                         "required": []
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "generate_scenario_from_template",
+                    "description": "按模板批量生成参数化 OpenSCENARIO(.xosc) 场景文件。与 scenario_* 系列不同：本工具产出可复用、可批量、可复现的场景文件，而非直接往 CARLA 生成 actor。支持参数化采样与 seed 复现，并输出 manifest.json 记录每个场景的参数与指纹。可用模板见 list_scenario_templates。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "template": {"type": "string", "description": "模板名，如 cut_in(危险切入)、lead_brake(前车急刹)、crossing_hazard(路口横穿)、low_overlap(低重叠)、wrong_way(逆行)、unprotected_turn(无保护左转)、junction_light(信号交叉口)、lead_stationary(前车静止)", "default": "cut_in"},
+                            "n": {"type": "integer", "description": "生成数量，默认1", "default": 1},
+                            "seed": {"type": "integer", "description": "随机种子，相同 seed 生成结果可复现", "default": None},
+                            "out_dir": {"type": "string", "description": "输出目录，留空则使用 llm/output/scenarios", "default": ""},
+                            "params_json": {"type": "string", "description": "覆盖模板默认参数的 JSON 字符串，如 {\"gap\": 15.0, \"delay\": 3.0}", "default": "{}"}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_scenario_templates",
+                    "description": "列出所有可用的参数化场景模板及其参数空间、标签、对应的 CARLA 原生函数。当用户询问'有哪些场景模板'、'支持哪些场景'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "validate_scenario",
+                    "description": "校验单个 .xosc 场景文件。做两层检查：结构层用 scenariogeneration 解析器往返解析，语义层断言实体数/行为数/触发条件与预期一致。当用户要求'检查场景'、'校验场景文件'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {"type": "string", "description": "要校验的 .xosc 文件路径（可相对 llm/ 目录）", "default": ""}
+                        },
+                        "required": ["file_path"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "set_third_person_view",
+                    "description": "将观察者视角切换到第三人称（跟随目标后方）。需要先用 get_all_vehicles 或 spawn_* 拿到 actor ID。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_id": {"type": "integer", "description": "目标 actor ID，留空则回到默认视角", "default": None}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "set_first_person_view",
+                    "description": "将观察者视角切换到第一人称（驾驶员/行人视角）。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_id": {"type": "integer", "description": "目标 actor ID", "default": None}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "set_overhead_view",
+                    "description": "将观察者视角切换到俯视（鸟瞰）。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "target_id": {"type": "integer", "description": "俯视中心目标 actor ID，留空则用地图默认位置", "default": None}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "set_free_view",
+                    "description": "将观察者视角切换为自由视角（默认高处俯视全场）。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "start_view_follow",
+                    "description": "让视角持续跟随指定 actor 运动。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "view_mode": {"type": "string", "description": "跟随模式", "enum": ["third_person", "first_person", "overhead"], "default": "third_person"},
+                            "target_id": {"type": "integer", "description": "要跟随的 actor ID", "default": None}
+                        },
+                        "required": ["target_id"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "stop_view_follow",
+                    "description": "停止视角跟随。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "set_synchronous_mode",
+                    "description": "设置 CARLA 同步模式。同步模式下世界按固定时间步推进，便于复现与录制；异步模式则按真实时间运行。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "enabled": {"type": "boolean", "description": "是否启用同步模式", "default": True},
+                            "fixed_delta_seconds": {"type": "number", "description": "同步模式下的固定时间步长（秒）", "default": 0.05}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "spawn_sumo_grid_network",
+                    "description": "生成 SUMO 网格路网与随机车流（generate_sumo_network 的历史别名）。需先设置 SUMO_HOME 环境变量。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "grid_size": {"type": "integer", "description": "网格边长（NxN）", "default": 3},
+                            "simulation_time": {"type": "integer", "description": "仿真时长（秒）", "default": 200},
+                            "vehicle_spawn_interval": {"type": "number", "description": "发车间隔（秒/辆）", "default": 2}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "generate_rich_xodr",
+                    "description": "按布局生成参数化 OpenDRIVE(.xodr) 路网文件。支持 7 种布局：straight(直路)、highway_curve(高速弯道,带缓和曲线)、s_curve(S弯)、cross_junction(十字路口)、t_junction(丁字路口)、on_ramp_merge(匝道合流,车道1→2)、off_ramp_diverge(匝道分流,车道2→1)。与 generate_sumo_network 不同：后者用 netconvert 生成规则网格，本工具可直接控制道路几何与车道数变化。可用布局见 list_road_layouts。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "layout": {"type": "string", "description": "布局名", "enum": ["straight", "highway_curve", "s_curve", "cross_junction", "t_junction", "on_ramp_merge", "off_ramp_diverge"], "default": "straight"},
+                            "params_json": {"type": "string", "description": "覆盖默认参数的 JSON 字符串，如 {\"radius\": 150.0, \"angle\": 60.0}", "default": "{}"},
+                            "out_dir": {"type": "string", "description": "输出目录，留空则使用 llm/output/xodr", "default": ""},
+                            "filename": {"type": "string", "description": "输出文件名，留空则用 <layout>.xodr", "default": ""}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_road_layouts",
+                    "description": "列出可用的 OpenDRIVE 路网布局及其默认参数。当用户询问'有哪些路网布局'、'支持哪些道路类型'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
             }
         ] 
 
@@ -5784,37 +6358,42 @@ class FastMCPGitHubAssistant:
                 }
 
             elif function_name == "set_third_person_view":
-                result = await carla_client.set_third_person_view(arguments.get("target_id"))
+                # 注意：set_third_person_view 是同步方法，不能 await；
+                # 且它接收 actor 对象而非 ID，需先解析。
+                result = carla_client.set_third_person_view(
+                    _resolve_actor_by_id(arguments.get("target_id")))
                 return {
                     "success": True,
                     "data": result
                 }
 
             elif function_name == "set_first_person_view":
-                result = await carla_client.set_first_person_view(arguments.get("target_id"))
+                result = carla_client.set_first_person_view(
+                    _resolve_actor_by_id(arguments.get("target_id")))
                 return {
                     "success": True,
                     "data": result
                 }
 
             elif function_name == "set_overhead_view":
-                result = await carla_client.set_overhead_view(arguments.get("target_id"))
+                result = carla_client.set_overhead_view(
+                    _resolve_actor_by_id(arguments.get("target_id")))
                 return {
                     "success": True,
                     "data": result
                 }
 
             elif function_name == "set_free_view":
-                result = await carla_client.set_free_view()
+                result = carla_client.set_free_view()
                 return {
                     "success": True,
                     "data": result
                 }
 
             elif function_name == "start_view_follow":
-                result = await carla_client.start_view_follow(
+                result = carla_client.start_view_follow(
                     arguments.get("view_mode", "third_person"),
-                    arguments.get("target_id")
+                    _resolve_actor_by_id(arguments.get("target_id"))
                 )
                 return {
                     "success": True,
@@ -5829,10 +6408,14 @@ class FastMCPGitHubAssistant:
                 }
 
             elif function_name == "spawn_sumo_grid_network":
-                result = await spawn_sumo_grid_network_impl(
-                    grid_size=arguments.get("grid_size", 3),
-                    simulation_time=arguments.get("simulation_time", 200),
-                    vehicle_spawn_interval=arguments.get("vehicle_spawn_interval", 2)
+                # 历史遗留名字：与 generate_sumo_network 等价，仅参数名不同。
+                # 原先调用未定义的 spawn_sumo_grid_network_impl 会抛 NameError，
+                # 该分支又是第一个匹配，因此这里改为转发到已存在的实现。
+                result = await generate_sumo_network_impl(
+                    grid_x=arguments.get("grid_size", 3),
+                    grid_y=arguments.get("grid_size", 3),
+                    duration=arguments.get("simulation_time", 200),
+                    rate=arguments.get("vehicle_spawn_interval", 2)
                 )
                 return {
                     "success": True,
@@ -5841,7 +6424,8 @@ class FastMCPGitHubAssistant:
 
             elif function_name == "generate_openscenario":
                 result = await generate_openscenario_impl(
-                    xodr_file=arguments.get("xodr_file", "web_generated.xodr"),
+                    xodr_filename=arguments.get("xodr_filename", "web_generated.xodr"),
+                    scenario_name=arguments.get("scenario_name", "my_scenario"),
                     vehicle_speed=arguments.get("vehicle_speed", 10.0),
                     duration=arguments.get("duration", 30.0)
                 )
@@ -6075,6 +6659,81 @@ class FastMCPGitHubAssistant:
                     reference_id=arguments.get("reference_id"),
                     relative_distance=arguments.get("relative_distance"),
                     relative_angle=arguments.get("relative_angle", 0.0)
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "generate_scenario_from_template":
+                result = await generate_scenario_from_template_impl(
+                    template=arguments.get("template", "cut_in"),
+                    n=arguments.get("n", 1),
+                    seed=arguments.get("seed"),
+                    out_dir=arguments.get("out_dir", ""),
+                    params_json=arguments.get("params_json", "{}")
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "get_traffic_lights":
+                result = await get_traffic_lights_impl(
+                    query=arguments.get("query", ""),
+                    user_type=arguments.get("user_type")
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "setup_pedestrian_movement":
+                result = await setup_pedestrian_movement_impl(
+                    enable=arguments.get("enable", True),
+                    radius=arguments.get("radius", 0.0)
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "control_walker":
+                result = await control_walker_impl(
+                    action=arguments.get("action", "stop_all"),
+                    walker_id=arguments.get("walker_id")
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "spawn_vehicle_param":
+                result = await spawn_vehicle_param_impl(
+                    count=arguments.get("count", 1),
+                    blueprint_filter=arguments.get("blueprint_filter", "vehicle.*"),
+                    autopilot=arguments.get("autopilot", True),
+                    reference_id=arguments.get("reference_id"),
+                    relative_distance=arguments.get("relative_distance", 10.0),
+                    relative_angle=arguments.get("relative_angle", 0.0),
+                    initial_speed=arguments.get("initial_speed", 0.0)
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "generate_sumo_network":
+                result = await generate_sumo_network_impl(
+                    grid_x=arguments.get("grid_x", 3),
+                    grid_y=arguments.get("grid_y", 3),
+                    duration=arguments.get("duration", 200),
+                    rate=arguments.get("rate", 2.0)
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "generate_rich_xodr":
+                result = await generate_rich_xodr_impl(
+                    layout=arguments.get("layout", "straight"),
+                    params_json=arguments.get("params_json", "{}"),
+                    out_dir=arguments.get("out_dir", ""),
+                    filename=arguments.get("filename", "")
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "list_road_layouts":
+                result = await list_road_layouts_impl()
+                return {"success": True, "data": result}
+
+            elif function_name == "list_scenario_templates":
+                result = await list_scenario_templates_impl()
+                return {"success": True, "data": result}
+
+            elif function_name == "validate_scenario":
+                result = await validate_scenario_impl(
+                    file_path=arguments.get("file_path", "")
                 )
                 return {"success": True, "data": result}
 

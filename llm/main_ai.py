@@ -5139,6 +5139,320 @@ async def validate_scenario(file_path: str = "") -> str:
     return await validate_scenario_impl(file_path)
 
 
+# ---------------------------------------------------------------------------
+# 轨迹数据与批量合成
+#
+# 目标：从少量实采轨迹派生出大量合成数据，并把合成结果的统计特性
+# 与真实数据做量化对比，避免"能生成但不像"。
+# ---------------------------------------------------------------------------
+
+async def import_trajectory_impl(file_path: str = "", format: str = "",
+                                 column_map_json: str = "",
+                                 preview: int = 5) -> str:
+    """导入实采轨迹文件，报告结构与统计。"""
+    import json as _json
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    if not file_path:
+        return "❌ 请提供 file_path"
+
+    p = Path(file_path)
+    if not p.is_absolute():
+        p = Path(__file__).parent / file_path
+    if not p.exists():
+        return "❌ 文件不存在：%s" % p
+
+    try:
+        from trajectory_io import load, describe
+    except ImportError as e:
+        return "❌ 导入模块失败：%s" % e
+
+    cmap = None
+    if column_map_json:
+        try:
+            cmap = _json.loads(column_map_json)
+        except Exception as e:
+            return "❌ column_map_json 不是合法 JSON：%s" % e
+
+    try:
+        tset = load(str(p), fmt=format or None, **({"column_map": cmap} if cmap else {}))
+    except Exception as e:
+        return "❌ 读取失败：%s: %s" % (type(e).__name__, e)
+
+    lines = ["✅ 轨迹导入成功", "", describe(tset), ""]
+    extra = tset.extra or {}
+    if extra.get("column_map"):
+        lines.append("识别到的列映射：")
+        for k, v in extra["column_map"].items():
+            if not k.endswith("_unit"):
+                lines.append("   %-8s <- %s" % (k, v))
+        lines.append("")
+    if "speed_position_deviation" in extra:
+        dev = extra["speed_position_deviation"]
+        lines.append("速度/位置自洽性偏差：%.1f%%%s"
+                     % (dev * 100, "  ⚠️ " + extra["warning"] if dev > 0.5 else ""))
+        lines.append("")
+
+    lines.append("前 %d 条轨迹明细：" % min(preview, len(tset.tracks)))
+    for t in tset.tracks[:preview]:
+        st = t.stats()
+        lines.append("   %s: %d 帧, %.1fs, %.1f m, 均速 %.1f m/s, 最高 %.1f"
+                     % (st["id"], st["frames"], st["duration"],
+                        st["path_length"], st["speed_mean"], st["speed_max"]))
+    return "\n".join(lines)
+
+
+async def synthesize_trajectory_dataset_impl(
+    seed_path: str = "", n: int = 100, seed: int = None,
+    n_ops: int = 2, strength: str = "mild",
+    out_dir: str = "", max_per_seed: int = None,
+    format: str = "",
+) -> str:
+    """从实采轨迹批量合成数据。"""
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    if not seed_path:
+        return "❌ 请提供 seed_path（实采轨迹文件）"
+    if n < 1:
+        return "❌ n 必须 >= 1"
+    if strength not in ("mild", "medium", "strong"):
+        return "❌ strength 只能是 mild / medium / strong"
+
+    p = Path(seed_path)
+    if not p.is_absolute():
+        p = Path(__file__).parent / seed_path
+    if not p.exists():
+        return "❌ 种子文件不存在：%s" % p
+
+    try:
+        from trajectory_io import load
+        from synthesis_batch import synthesize
+    except ImportError as e:
+        return "❌ 导入模块失败：%s" % e
+
+    try:
+        seeds = load(str(p), fmt=format or None)
+    except Exception as e:
+        return "❌ 读取种子失败：%s: %s" % (type(e).__name__, e)
+
+    if not seeds.tracks:
+        return "❌ 种子文件里没有轨迹"
+
+    root = out_dir or str(Path(__file__).parent / "output" / "synthetic")
+    try:
+        man = synthesize(seeds, n, root, seed=seed, n_ops=n_ops,
+                         strength=strength, max_per_seed=max_per_seed,
+                         verbose=False)
+    except Exception as e:
+        app_logger.error("❌ 批量合成失败: %s" % e)
+        return "❌ 合成失败：%s: %s" % (type(e).__name__, e)
+
+    lines = [
+        "✅ 批量合成完成",
+        "",
+        "📊 批次：%s" % man["batch_id"],
+        "   种子来源：%s（%d 条轨迹，%g Hz）" % (seeds.source or p.name,
+                                              len(seeds.tracks), seeds.hz),
+        "   合成数量：%d   成功：%d   失败：%d   续跑：%d"
+        % (man["count"], man["generated"], man["failed"], man["resumed"]),
+        "   seed：%s   算子数：%d   强度：%s"
+        % ("未指定" if man["seed"] is None else man["seed"],
+           n_ops, strength),
+        "   耗时：%.2f 秒（%.0f 条/秒）"
+        % (man["elapsed_seconds"],
+           man["count"] / max(man["elapsed_seconds"], 1e-9)),
+        "",
+        "📁 输出目录：%s" % man["out_dir"],
+        "📋 清单：%s" % man["manifest_path"],
+        "",
+        "📄 派生示例：",
+    ]
+    for r in man["scenarios"][:3]:
+        lines.append("   - %s  (来自种子 %s)" % (r["file"], r["seed_track"]))
+        lines.append("     算子链：%s" % r["pipeline_text"])
+    if man["count"] > 3:
+        lines.append("   ... 共 %d 条" % man["count"])
+    return "\n".join(lines)
+
+
+async def compare_trajectory_distribution_impl(
+    real_path: str = "", synthetic_dir: str = "", format: str = "",
+) -> str:
+    """对比真实与合成轨迹的分布。"""
+    import os as _os
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    if not real_path:
+        return "❌ 请提供 real_path"
+    if not synthetic_dir:
+        return "❌ 请提供 synthetic_dir（合成批次目录）"
+
+    rp = Path(real_path)
+    if not rp.is_absolute():
+        rp = Path(__file__).parent / real_path
+    sd = Path(synthetic_dir)
+    if not sd.is_absolute():
+        sd = Path(__file__).parent / synthetic_dir
+    if not rp.exists():
+        return "❌ 真实数据文件不存在：%s" % rp
+    if not sd.exists():
+        return "❌ 合成目录不存在：%s" % sd
+
+    try:
+        from trajectory import TrajectorySet
+        from trajectory_io import load, load_csv
+        from distribution_check import compare, format_report
+    except ImportError as e:
+        return "❌ 导入模块失败：%s" % e
+
+    try:
+        real = load(str(rp), fmt=format or None)
+    except Exception as e:
+        return "❌ 读取真实数据失败：%s: %s" % (type(e).__name__, e)
+
+    syn = TrajectorySet(hz=real.hz)
+    files = sorted(f for f in _os.listdir(str(sd)) if f.endswith(".csv"))
+    if not files:
+        return "❌ 合成目录里没有 CSV 文件"
+    for f in files:
+        try:
+            part = load_csv(_os.path.join(str(sd), f))
+            syn.tracks.extend(part.tracks)
+        except Exception:
+            continue
+    syn.hz = real.hz
+
+    if not syn.tracks:
+        return "❌ 没有成功载入任何合成轨迹"
+
+    rep = compare(real, syn)
+    return "📊 分布对比\n\n" + format_report(rep)
+
+
+async def export_sumo_demand_impl(trajectory_path: str = "",
+                                  out_path: str = "",
+                                  depart_interval: float = 0.5) -> str:
+    """把轨迹导出为 SUMO 需求文件 rou.xml。"""
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    if not trajectory_path:
+        return "❌ 请提供 trajectory_path"
+
+    p = Path(trajectory_path)
+    if not p.is_absolute():
+        p = Path(__file__).parent / trajectory_path
+    if not p.exists():
+        return "❌ 文件不存在：%s" % p
+
+    try:
+        from trajectory_io import load
+        from trajectory_to_sumo import trajectory_to_flow_xml, inspect_flow_xml
+    except ImportError as e:
+        return "❌ 导入模块失败：%s" % e
+
+    try:
+        tset = load(str(p))
+    except Exception as e:
+        return "❌ 读取轨迹失败：%s: %s" % (type(e).__name__, e)
+
+    out = Path(out_path) if out_path else (Path(__file__).parent / "output" / "sumo_demand.rou.xml")
+    try:
+        info = trajectory_to_flow_xml(tset, str(out),
+                                      depart_interval=depart_interval)
+        back = inspect_flow_xml(str(out))
+    except Exception as e:
+        return "❌ 导出失败：%s: %s" % (type(e).__name__, e)
+
+    return "\n".join([
+        "✅ SUMO 需求文件已生成",
+        "",
+        "📁 文件：%s" % out,
+        "📊 大小：%d 字节" % info["size_bytes"],
+        "🚗 车辆数：%d（跳过 %d）" % (info["written"], info["skipped"]),
+        "⏱️  出发时刻范围：%s ~ %s 秒"
+        % (back["begin_min"], back["begin_max"]),
+        "",
+        "▶️ 用法：sumo -n <路网>.net.xml -r %s" % out.name,
+    ])
+
+
+@mcp.tool()
+async def import_trajectory(file_path: str = "", format: str = "",
+                            column_map_json: str = "", preview: int = 5) -> str:
+    """导入实采轨迹文件并报告结构统计。
+
+    支持三种格式：CSV（自动识别 NGSIM / highD / 自定义列名）、
+    SUMO FCD XML、JSON。
+
+    Args:
+        file_path: 轨迹文件路径（可相对 llm/ 目录）
+        format: 强制指定格式 csv / fcd / json，留空按扩展名判断
+        column_map_json: 自定义列名映射的 JSON，如 {"x": "Local_X"}
+        preview: 明细展示条数
+    """
+    return await import_trajectory_impl(file_path, format, column_map_json, preview)
+
+
+@mcp.tool()
+async def synthesize_trajectory_dataset(seed_path: str = "", n: int = 100,
+                                        seed: int = None, n_ops: int = 2,
+                                        strength: str = "mild",
+                                        out_dir: str = "",
+                                        max_per_seed: int = None,
+                                        format: str = "") -> str:
+    """从实采轨迹批量合成数据（目标②的核心工具）。
+
+    加载种子轨迹后，随机组合增强算子（加噪/时间缩放/平移/车道偏移/
+    速度变形）派生出 n 条合成轨迹，输出规范 CSV + manifest.json。
+
+    Args:
+        seed_path: 实采轨迹文件路径
+        n: 合成条数
+        seed: 随机种子（相同 seed 结果可复现）
+        n_ops: 每条轨迹应用的算子数
+        strength: 增强强度 mild / medium / strong
+        out_dir: 输出目录（留空则用 llm/output/synthetic）
+        max_per_seed: 单条种子最多派生多少条
+        format: 强制指定种子文件格式
+    """
+    return await synthesize_trajectory_dataset_impl(
+        seed_path, n, seed, n_ops, strength, out_dir, max_per_seed, format)
+
+
+@mcp.tool()
+async def compare_trajectory_distribution(real_path: str = "",
+                                          synthetic_dir: str = "",
+                                          format: str = "") -> str:
+    """对比真实轨迹与合成轨迹的分布（速度/加速度/里程/时长/曲率）。
+
+    用 KS 统计量与 Wasserstein 距离量化差异，越界会给出告警。
+    """
+    return await compare_trajectory_distribution_impl(real_path, synthetic_dir, format)
+
+
+@mcp.tool()
+async def export_sumo_demand(trajectory_path: str = "", out_path: str = "",
+                             depart_interval: float = 0.5) -> str:
+    """把轨迹文件导出为 SUMO 需求文件 rou.xml（每条轨迹一个 flow）。"""
+    return await export_sumo_demand_impl(trajectory_path, out_path, depart_interval)
+
+
 def _resolve_actor_by_id(actor_id):
     """按 ID 解析 CARLA actor。
 
@@ -6156,6 +6470,76 @@ class FastMCPGitHubAssistant:
                         "required": []
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "import_trajectory",
+                    "description": "导入实采轨迹文件并报告结构与统计。支持 CSV（自动识别 NGSIM / highD / 自定义列名）、SUMO FCD XML、JSON 三种格式。当用户要求'读取轨迹数据'、'导入实采数据'、'看看这个轨迹文件'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "file_path": {"type": "string", "description": "轨迹文件路径，可相对 llm/ 目录", "default": ""},
+                            "format": {"type": "string", "description": "强制指定格式，留空按扩展名判断", "enum": ["", "csv", "fcd", "json"], "default": ""},
+                            "column_map_json": {"type": "string", "description": "自定义列名映射的 JSON，如 {\"x\": \"Local_X\", \"y\": \"Local_Y\"}", "default": ""},
+                            "preview": {"type": "integer", "description": "明细展示条数", "default": 5}
+                        },
+                        "required": ["file_path"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "synthesize_trajectory_dataset",
+                    "description": "从实采轨迹批量合成数据。加载种子轨迹后随机组合增强算子（加噪/时间缩放/空间平移/车道偏移/速度变形）派生大量合成轨迹，输出规范 CSV + manifest.json 清单（记录每条合成的来源种子与完整算子链，可复现）。当用户要求'生成合成数据'、'数据增强'、'基于实采数据批量生成'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "seed_path": {"type": "string", "description": "实采轨迹文件路径", "default": ""},
+                            "n": {"type": "integer", "description": "合成条数，默认100", "default": 100},
+                            "seed": {"type": "integer", "description": "随机种子，相同 seed 结果可复现", "default": None},
+                            "n_ops": {"type": "integer", "description": "每条轨迹应用的增强算子数，默认2", "default": 2},
+                            "strength": {"type": "string", "description": "增强强度", "enum": ["mild", "medium", "strong"], "default": "mild"},
+                            "out_dir": {"type": "string", "description": "输出目录，留空则用 llm/output/synthetic", "default": ""},
+                            "max_per_seed": {"type": "integer", "description": "单条种子最多派生多少条，防止过度放大", "default": None},
+                            "format": {"type": "string", "description": "强制指定种子文件格式", "enum": ["", "csv", "fcd", "json"], "default": ""}
+                        },
+                        "required": ["seed_path"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "compare_trajectory_distribution",
+                    "description": "对比真实轨迹与合成轨迹的分布，用 KS 统计量和 Wasserstein 距离量化速度/加速度/里程/时长/曲率的差异，越界给出告警。用于判断合成数据是否'像'真实数据。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "real_path": {"type": "string", "description": "真实轨迹文件路径", "default": ""},
+                            "synthetic_dir": {"type": "string", "description": "合成批次目录（含 CSV 的目录）", "default": ""},
+                            "format": {"type": "string", "description": "真实数据的格式", "enum": ["", "csv", "fcd", "json"], "default": ""}
+                        },
+                        "required": ["real_path", "synthetic_dir"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "export_sumo_demand",
+                    "description": "把轨迹文件导出为 SUMO 需求文件 rou.xml，每条轨迹生成一个 flow，出发时刻按轨迹起始时间或指定间隔错开。需配合路网 .net.xml 使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "trajectory_path": {"type": "string", "description": "轨迹文件路径", "default": ""},
+                            "out_path": {"type": "string", "description": "输出 rou.xml 路径，留空则用 llm/output/sumo_demand.rou.xml", "default": ""},
+                            "depart_interval": {"type": "number", "description": "轨迹起始时刻相同时的错峰间隔（秒）", "default": 0.5}
+                        },
+                        "required": ["trajectory_path"]
+                    }
+                }
             }
         ] 
 
@@ -6720,6 +7104,44 @@ class FastMCPGitHubAssistant:
                     params_json=arguments.get("params_json", "{}"),
                     out_dir=arguments.get("out_dir", ""),
                     filename=arguments.get("filename", "")
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "import_trajectory":
+                result = await import_trajectory_impl(
+                    file_path=arguments.get("file_path", ""),
+                    format=arguments.get("format", ""),
+                    column_map_json=arguments.get("column_map_json", ""),
+                    preview=arguments.get("preview", 5)
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "synthesize_trajectory_dataset":
+                result = await synthesize_trajectory_dataset_impl(
+                    seed_path=arguments.get("seed_path", ""),
+                    n=arguments.get("n", 100),
+                    seed=arguments.get("seed"),
+                    n_ops=arguments.get("n_ops", 2),
+                    strength=arguments.get("strength", "mild"),
+                    out_dir=arguments.get("out_dir", ""),
+                    max_per_seed=arguments.get("max_per_seed"),
+                    format=arguments.get("format", "")
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "compare_trajectory_distribution":
+                result = await compare_trajectory_distribution_impl(
+                    real_path=arguments.get("real_path", ""),
+                    synthetic_dir=arguments.get("synthetic_dir", ""),
+                    format=arguments.get("format", "")
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "export_sumo_demand":
+                result = await export_sumo_demand_impl(
+                    trajectory_path=arguments.get("trajectory_path", ""),
+                    out_path=arguments.get("out_path", ""),
+                    depart_interval=arguments.get("depart_interval", 0.5)
                 )
                 return {"success": True, "data": result}
 

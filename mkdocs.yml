@@ -60,6 +60,7 @@ copyright: OpenHUTB 版权所有 &copy; {year}
 nav:
 - 首页: 'index.md'
 - mkdocs简介: 'mkdocs.md'
+- 新增特性: '新增特性.md'
 
 # - mdx_math 用于行内公式显示
 markdown_extensions:

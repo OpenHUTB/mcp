@@ -19,8 +19,9 @@ netconvert 生成的规则网格，没有任何道路几何/车道数变化的�
 """
 from __future__ import annotations
 
+import math
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from scenariogeneration import xodr
 from scenariogeneration.xodr import LaneDef
@@ -160,31 +161,46 @@ def build_off_ramp_diverge(p: Dict[str, Any]) -> Tuple[xodr.OpenDrive, List[xodr
 # =====================================================================
 # 路口布局
 # =====================================================================
-def _build_junction(p: Dict[str, Any], arms: int, name: str
+def _build_junction(p: Dict[str, Any], angles_deg: Sequence[float], name: str
                     ) -> Tuple[xodr.OpenDrive, List[xodr.Road]]:
-    """arms 条臂的路口。arms=4 十字，arms=3 丁字。"""
+    """按给定角度列表构造路口。
+
+    角度是各条臂向外伸出的方向（度，0=东，逆时针）。
+    十字路口用 [0, 90, 180, 270]；
+    丁字路口用 [0, 180, 270]（横杠东西向 + 竖杠朝南），
+    而不是简单均分 120°——均分出来的是 Y 形，不是丁字。
+    """
     arm_len = float(p["arm_length"])
-    radius = float(p["radius"])
     w = float(p["lane_width"])
 
     odr = xodr.OpenDrive(name)
     jc = xodr.CommonJunctionCreator(id=100, name="junction_%s" % name)
     roads: List[xodr.Road] = []
 
-    # 每条臂一条路，圆形均布
-    for i in range(arms):
+    # 每条臂一条路。用笛卡尔定位，而不是圆周定位：
+    # 圆周定位 (radius, angle) 把 angle 当作道路自身朝向，而所有臂路都是
+    # 从原点沿 +X 生成的，摆不出对称的十字/T 字（实测 4 臂被摆成了
+    # 0°/116.6°/233.2°/349.9°，渲染出来像个 Y 路口）。
+    # 笛卡尔定位的 heading 语义是"指向路口中心"，据此把每条臂摆到
+    # 半径 arm_len 的圆周上、朝向圆心。
+    for i, deg in enumerate(angles_deg):
         road = xodr.create_road(xodr.Line(arm_len), i + 1,
                                 left_lanes=1, right_lanes=1, lane_width=w)
         odr.add_road(road)
         roads.append(road)
-        angle = 360.0 * i / arms
-        jc.add_incoming_road_circular_geometry(road, radius, angle,
-                                               road_connection="successor")
+
+        ang = math.radians(deg)
+        px = arm_len * math.cos(ang)
+        py = arm_len * math.sin(ang)
+        heading = ang + math.pi          # 指向圆心
+        jc.add_incoming_road_cartesian_geometry(
+            road, px, py, heading, road_connection="successor")
 
     # 相邻臂两两互连（双向）
-    for i in range(arms):
+    n = len(angles_deg)
+    for i in range(n):
         a = i + 1
-        b = (i + 1) % arms + 1
+        b = (i + 1) % n + 1
         for l1 in (1, -1):
             jc.add_connection(a, b, lane_one_id=l1, lane_two_id=-l1)
 
@@ -193,11 +209,13 @@ def _build_junction(p: Dict[str, Any], arms: int, name: str
 
 
 def build_cross_junction(p: Dict[str, Any]):
-    return _build_junction(p, 4, "cross_junction")
+    """十字路口：四条臂朝东南西北。"""
+    return _build_junction(p, (0.0, 90.0, 180.0, 270.0), "cross_junction")
 
 
 def build_t_junction(p: Dict[str, Any]):
-    return _build_junction(p, 3, "t_junction")
+    """丁字路口：横杠东西向 + 竖杠朝南。"""
+    return _build_junction(p, (0.0, 180.0, 270.0), "t_junction")
 
 
 # =====================================================================
@@ -228,9 +246,13 @@ def build(layout: str, params: Optional[Dict[str, Any]] = None
     p = dict(DEFAULT_PARAMS[layout])
     p.update(params or {})
     odr, roads = _BUILDERS[layout](p)
-    # 路口需要收尾计算
-    if layout in ("cross_junction", "t_junction"):
-        odr.adjust_roads_and_lanes()
+
+    # 这一步必须无条件调用。
+    # PlanView.add_geometry() 只把几何存进 _raw_geometries，而
+    # PlanView.get_element() 遍历的是 _adjusted_geometries —— 不调
+    # adjust_roads_and_lanes() 的话写出的 <planView/> 是空的，
+    # 生成的文件对 CARLA / SUMO 都是无效的。
+    odr.adjust_roads_and_lanes()
     return odr, roads
 
 
@@ -265,11 +287,16 @@ def _effective_lanes(section, side: str) -> int:
 
 
 def inspect_road(path: str) -> Dict[str, Any]:
-    """回读校验：Road 数、车道数、车道数随 s 的变化。"""
+    """回读校验：Road 数、车道数、车道数随 s 的变化、以及几何是否存在。
+
+    geometries 必须与 road_count 一致：如果 <planView/> 是空的，说明
+    生成时漏了 adjust_roads_and_lanes()，文件无效。
+    """
     import xml.etree.ElementTree as ET
     root = ET.parse(path).getroot()
     roads = root.findall("road")
     info = []
+    total_geoms = 0
     for r in roads:
         lsecs = r.findall(".//laneSection")
         profile = []
@@ -280,6 +307,8 @@ def inspect_road(path: str) -> Dict[str, Any]:
                 "right": _effective_lanes(s, "right"),
             })
         first = lsecs[0] if lsecs else None
+        n_geom = len(r.findall("./planView/geometry"))
+        total_geoms += n_geom
         info.append({
             "id": r.get("id"),
             "length": r.get("length"),
@@ -287,11 +316,16 @@ def inspect_road(path: str) -> Dict[str, Any]:
             "lanes_first": (_effective_lanes(first, "left")
                             + _effective_lanes(first, "right")) if first else 0,
             "lane_profile": profile,
+            "geometries": n_geom,
         })
     juncs = root.findall("junction")
+    valid = total_geoms >= len(roads) and len(roads) > 0
     return {
         "road_count": len(roads),
         "junction_count": len(juncs),
+        "geometry_count": total_geoms,
         "roads": info,
         "size_bytes": os.path.getsize(path),
+        "valid": valid,
+        "error": "" if valid else "有空 planView，几何没写进去（缺 adjust_roads_and_lanes）",
     }

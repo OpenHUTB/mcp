@@ -286,6 +286,9 @@ class BehaviorSpec(BaseModel):
 
     # follow_trajectory（目标②用）
     trajectory_file: Optional[str] = None
+    # 直接给点：[[t, x, y], ...]，世界坐标（米）、时间（秒）。
+    # 与 trajectory_file 二选一；给了这个就不读文件。
+    trajectory_points: Optional[List[List[float]]] = None
 
     # 通用动力学
     dynamics_shape: DynamicsShape = DynamicsShape.LINEAR
@@ -303,8 +306,15 @@ class BehaviorSpec(BaseModel):
                 raise ValueError("lane_change 行为需要 lane_change 值")
             if self.lane_change == 0:
                 raise ValueError("lane_change 不能为 0")
-        if self.kind == BehaviorKind.FOLLOW_TRAJECTORY and not self.trajectory_file:
-            raise ValueError("follow_trajectory 需要 trajectory_file")
+        if self.kind == BehaviorKind.FOLLOW_TRAJECTORY:
+            if not self.trajectory_file and not self.trajectory_points:
+                raise ValueError(
+                    "follow_trajectory 需要 trajectory_file 或 trajectory_points")
+            if self.trajectory_points is not None and len(self.trajectory_points) < 2:
+                raise ValueError("trajectory_points 至少需要 2 个点")
+            if self.trajectory_file and self.trajectory_points:
+                raise ValueError(
+                    "trajectory_file 与 trajectory_points 只能给一个")
         return self
 
     def resolved_name(self) -> str:

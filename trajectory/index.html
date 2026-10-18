@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+
+<html class="writer-html5" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="IE=edge" http-equiv="X-UA-Compatible"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="../img/favicon.ico" rel="shortcut icon"/>
+<title>轨迹合成 - OpenHUTB 文档模板</title>
+<link href="../css/theme.css" rel="stylesheet"/>
+<link href="../css/theme_extra.css" rel="stylesheet"/>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" rel="stylesheet"/>
+<link href="../extra.css" rel="stylesheet"/>
+<script>
+        // Current page data
+        var mkdocs_page_name = "\u8f68\u8ff9\u5408\u6210";
+        var mkdocs_page_input_path = "trajectory.md";
+        var mkdocs_page_url = null;
+      </script>
+<!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+</head>
+<body class="wy-body-for-nav" role="document">
+<div class="wy-grid-for-nav">
+<nav class="wy-nav-side stickynav" data-toggle="wy-nav-shift">
+<div class="wy-side-scroll">
+<div class="wy-side-nav-search">
+<a class="icon icon-home" href=".."> OpenHUTB 文档模板
+        </a><div role="search">
+<form action="../search.html" class="wy-form" id="rtd-search-form" method="get">
+<input aria-label="Search docs" name="q" placeholder="搜索文档" title="Type search term here" type="text"/>
+</form>
+</div>
+</div>
+<div aria-label="Navigation menu" class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../new-features/">New Features</a>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../setup/">环境配置</a>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../scenario/">场景生成</a>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../road/">路网生成</a>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../carla/">CARLA 执行</a>
+</li>
+</ul>
+<ul class="current">
+<li class="toctree-l1 current"><a class="reference internal current" href="#">轨迹合成</a>
+<ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="#1-工具参数">1. 工具参数</a>
+<ul>
+<li class="toctree-l3"><a class="reference internal" href="#11-import_trajectory">1.1 import_trajectory</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#12-synthesize_trajectory_dataset">1.2 synthesize_trajectory_dataset</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#13-compare_trajectory_distribution">1.3 compare_trajectory_distribution</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#14-export_sumo_demand">1.4 export_sumo_demand</a>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#2-支持的格式">2. 支持的格式</a>
+<ul>
+<li class="toctree-l3"><a class="reference internal" href="#列名映射">列名映射</a>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#3-5-类增强算子">3. 5 类增强算子</a>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#4-对话示例">4. 对话示例</a>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#5-代码示例">5. 代码示例</a>
+<ul>
+<li class="toctree-l3"><a class="reference internal" href="#51-导入并查看">5.1 导入并查看</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#52-批量合成">5.2 批量合成</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#53-分布对比">5.3 分布对比</a>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#6-单位换算">6. 单位换算</a>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#7-时间归一化">7. 时间归一化</a>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#8-输出结构">8. 输出结构</a>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#9-实测">9. 实测</a>
+</li>
+</ul>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../gallery/">效果展示</a>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../limits/">实测数据与限制</a>
+</li>
+</ul>
+</div>
+</div>
+</nav>
+<section class="wy-nav-content-wrap" data-toggle="wy-nav-shift">
+<nav aria-label="Mobile navigation menu" class="wy-nav-top" role="navigation">
+<i class="fa fa-bars" data-toggle="wy-nav-top"></i>
+<a href="..">OpenHUTB 文档模板</a>
+</nav>
+<div class="wy-nav-content">
+<div class="rst-content"><div aria-label="breadcrumbs navigation" role="navigation">
+<ul class="wy-breadcrumbs">
+<li><a aria-label="Docs" class="icon icon-home" href=".."></a></li>
+<li class="breadcrumb-item active">轨迹合成</li>
+<li class="wy-breadcrumbs-aside">
+<a href="https://github.com/OpenHUTB/template/edit/master/docs/trajectory.md"> 编辑页面</a>
+</li>
+</ul>
+<hr/>
+</div>
+<div class="document" itemscope="itemscope" itemtype="http://schema.org/Article" role="main">
+<div class="section" itemprop="articleBody">
+<div><h1 id="实采轨迹批量合成">实采轨迹批量合成</h1>
+<p>把有限的实采轨迹扩增为大批量合成数据，并量化合成数据与真实数据的分布差异。</p>
+<h2 id="1-工具参数">1. 工具参数</h2>
+<h3 id="11-import_trajectory">1.1 <code>import_trajectory</code></h3>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>类型</th>
+<th>默认值</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>file_path</code></td>
+<td>string</td>
+<td>必填</td>
+<td>轨迹文件</td>
+</tr>
+<tr>
+<td><code>format</code></td>
+<td>string</td>
+<td>自动推断</td>
+<td><code>csv</code> / <code>fcd</code> / <code>json</code></td>
+</tr>
+<tr>
+<td><code>column_map_json</code></td>
+<td>string</td>
+<td><code>{}</code></td>
+<td>自定义列名映射</td>
+</tr>
+<tr>
+<td><code>preview</code></td>
+<td>int</td>
+<td>5</td>
+<td>预览条数</td>
+</tr>
+</tbody>
+</table>
+<h3 id="12-synthesize_trajectory_dataset">1.2 <code>synthesize_trajectory_dataset</code></h3>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>类型</th>
+<th>默认值</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>seed_path</code></td>
+<td>string</td>
+<td>必填</td>
+<td>种子轨迹文件</td>
+</tr>
+<tr>
+<td><code>n</code></td>
+<td>int</td>
+<td>100</td>
+<td>合成数量</td>
+</tr>
+<tr>
+<td><code>seed</code></td>
+<td>int</td>
+<td>None</td>
+<td>随机种子</td>
+</tr>
+<tr>
+<td><code>n_ops</code></td>
+<td>int</td>
+<td>2</td>
+<td>每条轨迹叠加的算子数</td>
+</tr>
+<tr>
+<td><code>strength</code></td>
+<td>string</td>
+<td><code>mild</code></td>
+<td>增强强度 <code>mild</code> / <code>medium</code> / <code>strong</code></td>
+</tr>
+<tr>
+<td><code>max_per_seed</code></td>
+<td>int</td>
+<td>None</td>
+<td>每个种子的最大衍生数</td>
+</tr>
+<tr>
+<td><code>out_dir</code></td>
+<td>string</td>
+<td><code>llm/output/synthetic</code></td>
+<td>输出目录</td>
+</tr>
+<tr>
+<td><code>format</code></td>
+<td>string</td>
+<td><code>csv</code></td>
+<td>输出格式</td>
+</tr>
+</tbody>
+</table>
+<h3 id="13-compare_trajectory_distribution">1.3 <code>compare_trajectory_distribution</code></h3>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>类型</th>
+<th>默认值</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>real_path</code></td>
+<td>string</td>
+<td>必填</td>
+<td>真实轨迹</td>
+</tr>
+<tr>
+<td><code>synthetic_dir</code></td>
+<td>string</td>
+<td>必填</td>
+<td>合成数据目录</td>
+</tr>
+<tr>
+<td><code>format</code></td>
+<td>string</td>
+<td>自动</td>
+<td>文件格式</td>
+</tr>
+</tbody>
+</table>
+<h3 id="14-export_sumo_demand">1.4 <code>export_sumo_demand</code></h3>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>类型</th>
+<th>默认值</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>trajectory_path</code></td>
+<td>string</td>
+<td>必填</td>
+<td>轨迹文件</td>
+</tr>
+<tr>
+<td><code>out_path</code></td>
+<td>string</td>
+<td><code>llm/output/sumo_demand.rou.xml</code></td>
+<td>输出路径</td>
+</tr>
+<tr>
+<td><code>depart_interval</code></td>
+<td>float</td>
+<td>0.5</td>
+<td>起始时刻相同时的错峰间隔（秒）</td>
+</tr>
+</tbody>
+</table>
+<h2 id="2-支持的格式">2. 支持的格式</h2>
+<table>
+<thead>
+<tr>
+<th>格式</th>
+<th>扩展名</th>
+<th>典型来源</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CSV</td>
+<td><code>.csv</code></td>
+<td>NGSIM、HighD 等数据集</td>
+</tr>
+<tr>
+<td>FCD</td>
+<td><code>.xml</code></td>
+<td>SUMO 的浮车数据输出</td>
+</tr>
+<tr>
+<td>JSON</td>
+<td><code>.json</code></td>
+<td>自建采集工具</td>
+</tr>
+</tbody>
+</table>
+<h3 id="列名映射">列名映射</h3>
+<p>不同数据集列名不一致时，用 <code>column_map_json</code> 指定：</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"time"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Global_Time"</span><span class="p">,</span><span class="w"> </span><span class="nt">"x"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Local_X"</span><span class="p">,</span><span class="w"> </span><span class="nt">"y"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Local_Y"</span><span class="p">,</span><span class="w"> </span><span class="nt">"v"</span><span class="p">:</span><span class="w"> </span><span class="s2">"v_Vel"</span><span class="p">}</span>
+</code></pre></div>
+<h2 id="3-5-类增强算子">3. 5 类增强算子</h2>
+<table>
+<thead>
+<tr>
+<th>算子</th>
+<th>作用</th>
+<th>强度影响</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>加噪</td>
+<td>位置/速度叠加高斯噪声</td>
+<td>噪声标准差</td>
+</tr>
+<tr>
+<td>时间缩放</td>
+<td>整体加速或减速</td>
+<td>缩放系数范围</td>
+</tr>
+<tr>
+<td>平移</td>
+<td>起点位置与航向偏移</td>
+<td>平移幅度</td>
+</tr>
+<tr>
+<td>法向偏移</td>
+<td>沿车道法向横向偏移</td>
+<td>偏移量</td>
+</tr>
+<tr>
+<td>速度变形</td>
+<td>速度曲线重新塑形</td>
+<td>变形幅度</td>
+</tr>
+</tbody>
+</table>
+<table>
+<thead>
+<tr>
+<th>强度</th>
+<th>适用场景</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mild</code></td>
+<td>保守扩增，分布几乎不变</td>
+</tr>
+<tr>
+<td><code>medium</code></td>
+<td>一般扩增</td>
+</tr>
+<tr>
+<td><code>strong</code></td>
+<td>压力测试，分布明显偏离</td>
+</tr>
+</tbody>
+</table>
+<h2 id="4-对话示例">4. 对话示例</h2>
+<div class="highlight"><pre><span></span><code>导入 _traj_samples 里的轨迹数据
+基于这些轨迹合成 100 条数据
+对比合成数据和真实数据的分布
+把轨迹导出成 SUMO 的需求文件
+</code></pre></div>
+<h2 id="5-代码示例">5. 代码示例</h2>
+<h3 id="51-导入并查看">5.1 导入并查看</h3>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">trajectory_io</span> <span class="kn">import</span> <span class="n">load_trajectories</span>
+
+<span class="n">seeds</span> <span class="o">=</span> <span class="n">load_trajectories</span><span class="p">(</span><span class="s2">"data/ngsim_sample.csv"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">seeds</span><span class="p">),</span> <span class="s2">"条轨迹"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">seeds</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">frames</span><span class="p">[:</span><span class="mi">3</span><span class="p">])</span>
+</code></pre></div>
+<h3 id="52-批量合成">5.2 批量合成</h3>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">synthesis_batch</span> <span class="kn">import</span> <span class="n">synthesize</span>
+
+<span class="n">result</span> <span class="o">=</span> <span class="n">synthesize</span><span class="p">(</span><span class="n">seeds</span><span class="p">,</span> <span class="n">n</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">42</span><span class="p">,</span> <span class="n">n_ops</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">strength</span><span class="o">=</span><span class="s2">"mild"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="p">[</span><span class="s2">"generated"</span><span class="p">],</span> <span class="n">result</span><span class="p">[</span><span class="s2">"skipped"</span><span class="p">])</span>
+<span class="c1"># 100 0</span>
+</code></pre></div>
+<h3 id="53-分布对比">5.3 分布对比</h3>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">distribution_check</span> <span class="kn">import</span> <span class="n">compare</span>
+
+<span class="n">report</span> <span class="o">=</span> <span class="n">compare</span><span class="p">(</span><span class="s2">"data/ngsim_sample.csv"</span><span class="p">,</span> <span class="s2">"output/synthetic"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">report</span><span class="p">[</span><span class="s2">"speed"</span><span class="p">][</span><span class="s2">"ks"</span><span class="p">],</span> <span class="n">report</span><span class="p">[</span><span class="s2">"duration"</span><span class="p">][</span><span class="s2">"ks"</span><span class="p">])</span>
+</code></pre></div>
+<h2 id="6-单位换算">6. 单位换算</h2>
+<p>NGSIM 格式的量纲与 SI 不一致，导入时自动处理：</p>
+<table>
+<thead>
+<tr>
+<th>列</th>
+<th>原始单位</th>
+<th>换算</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>Local_X</code> / <code>Local_Y</code></td>
+<td>英尺</td>
+<td>×0.3048 → 米</td>
+</tr>
+<tr>
+<td><code>v_Vel</code></td>
+<td>ft/s</td>
+<td>×0.3048 → m/s</td>
+</tr>
+<tr>
+<td><code>Global_Time</code></td>
+<td>毫秒</td>
+<td>÷1000 → 秒</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>导入后会校验"报告速度 vs 位置差分"，偏差超过 50% 会告警。
+早期版本只换算速度不换算位置，导致 <code>lane_offset</code> 重算时放大到 44 m/s。</p>
+</blockquote>
+<h2 id="7-时间归一化">7. 时间归一化</h2>
+<p>如果每条轨迹各自归零，100 辆车会全部在 t=0 出发。现在的做法是
+<strong>全局最小时间归一化</strong>，保留车与车之间的时间差：</p>
+<div class="highlight"><pre><span></span><code>种子轨迹起始时刻：0.00 s / 0.50 s / 1.20 s
+</code></pre></div>
+<h2 id="8-输出结构">8. 输出结构</h2>
+<div class="highlight"><pre><span></span><code>output/synthetic/
+├── track_0000.csv
+├── track_0001.csv
+├── ...
+├── manifest.json     # 每条轨迹的来源种子与算子链
+└── summary.json      # 汇总统计
+</code></pre></div>
+<p><code>manifest.json</code> 记录可追溯信息：</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"track"</span><span class="p">:</span><span class="w"> </span><span class="s2">"track_0007.csv"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"seed_track"</span><span class="p">:</span><span class="w"> </span><span class="s2">"ngsim_0002"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"seed_value"</span><span class="p">:</span><span class="w"> </span><span class="mi">42</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"ops"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"noise"</span><span class="p">,</span><span class="w"> </span><span class="s2">"time_scale"</span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<h2 id="9-实测">9. 实测</h2>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>轨迹导入</td>
+<td>CSV / FCD / JSON <strong>三种格式全部通过</strong></td>
+</tr>
+<tr>
+<td>批量合成</td>
+<td>100 条 <strong>0.17 s</strong>（595 条/秒），100/100 成功</td>
+</tr>
+<tr>
+<td>复现性</td>
+<td>同 seed 结果完全一致</td>
+</tr>
+<tr>
+<td>分布对比</td>
+<td>速度 KS 距离 <strong>0.029</strong></td>
+</tr>
+</tbody>
+</table></div>
+</div>
+</div><footer>
+<div aria-label="Footer Navigation" class="rst-footer-buttons" role="navigation">
+<a class="btn btn-neutral float-left" href="../carla/" title="CARLA 执行"><span class="icon icon-circle-arrow-left"></span> 前一页</a>
+<a class="btn btn-neutral float-right" href="../gallery/" title="效果展示">后一页 <span class="icon icon-circle-arrow-right"></span></a>
+</div>
+<hr/>
+<div role="contentinfo">
+<!-- Copyright etc -->
+<p>OpenHUTB 版权所有 © 2026</p>
+</div>
+</footer>
+</div>
+</div>
+</section>
+</div>
+<div aria-label="Versions" class="rst-versions" role="note">
+<span class="rst-current-version" data-toggle="rst-current-version">
+<span>
+<a href="https://github.com/OpenHUTB/template" style="color: #fcfcfc">OpenHUTB</a>
+</span>
+<span><a href="../carla/" style="color: #fcfcfc">« 前一页</a></span>
+<span><a href="../gallery/" style="color: #fcfcfc">后一页 »</a></span>
+</span>
+</div>
+<script src="../js/jquery-3.6.0.min.js"></script>
+<script>var base_url = "..";</script>
+<script src="../js/theme_extra.js"></script>
+<script src="../js/theme.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/raphael/2.2.7/raphael.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-sequence-diagrams/1.0.6/sequence-diagram-min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/flowchart/1.6.5/flowchart.min.js"></script>
+<script src="../js/umlconvert.js"></script>
+<script src="../search/main.js"></script>
+<script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+</body>
+</html>

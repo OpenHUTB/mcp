@@ -15,6 +15,8 @@ osc_builder.py - 把 ScenarioSpec(IR) 编译成 OpenSCENARIO (.xosc)
 """
 from __future__ import annotations
 
+import json
+import os
 from typing import Dict, List, Optional
 
 from scenariogeneration import xosc
@@ -128,6 +130,43 @@ def _dynamics(b: BehaviorSpec):
                                    _DIM[b.dynamics_dimension], b.dynamics_value)
 
 
+def _load_trajectory_points(path: str) -> List[List[float]]:
+    """从轨迹文件读 [t, x, y] 序列。
+
+    支持 JSON（trajectory_io 的输出）和 CSV（至少含 t/x/y 三列）。
+    """
+    if not os.path.exists(path):
+        raise OSCBuildError("轨迹文件不存在: %s" % path)
+
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".json":
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        frames = data.get("frames") if isinstance(data, dict) else data
+        if not isinstance(frames, list):
+            raise OSCBuildError("JSON 轨迹需要 frames 列表: %s" % path)
+        out = []
+        for fr in frames:
+            out.append([float(fr["t"]), float(fr["x"]), float(fr["y"])])
+        return out
+
+    if ext in (".csv", ".txt"):
+        import csv
+        with open(path, "r", encoding="utf-8-sig", newline="") as f:
+            rows = list(csv.DictReader(f))
+        if not rows:
+            raise OSCBuildError("CSV 轨迹为空: %s" % path)
+        keys = {k.lower() for k in rows[0].keys()}
+        if not {"t", "x", "y"} <= keys:
+            raise OSCBuildError(
+                "CSV 需要 t/x/y 列，实际有: %s" % sorted(keys))
+        lower = {k.lower(): k for k in rows[0].keys()}
+        return [[float(r[lower["t"]]), float(r[lower["x"]]),
+                 float(r[lower["y"]])] for r in rows]
+
+    raise OSCBuildError("不支持的轨迹格式: %s（只支持 json/csv）" % ext)
+
+
 def _make_action(b: BehaviorSpec):
     if b.kind == BehaviorKind.SPEED:
         if b.relative_speed:
@@ -162,8 +201,22 @@ def _make_action(b: BehaviorSpec):
         raise OSCBuildError("teleport 属于初始化动作，请放在 initial_position")
 
     if b.kind == BehaviorKind.FOLLOW_TRAJECTORY:
-        raise OSCBuildError(
-            "follow_trajectory 需要先由 trajectory 模块转换为 Polyline，暂未接线")
+        points = list(b.trajectory_points or [])
+        if not points and b.trajectory_file:
+            points = _load_trajectory_points(b.trajectory_file)
+        if len(points) < 2:
+            raise OSCBuildError(
+                "follow_trajectory 至少需要 2 个点（trajectory_points 或文件）")
+        times, positions = [], []
+        for p in points:
+            if len(p) < 3:
+                raise OSCBuildError(
+                    "trajectory 每个点需要 [t, x, y]，收到 %r" % (p,))
+            times.append(float(p[0]))
+            positions.append(xosc.WorldPosition(float(p[1]), float(p[2]), 0.0))
+        traj = xosc.Trajectory("%s_traj" % b.resolved_name(), closed=False)
+        traj.add_shape(xosc.Polyline(times, positions))
+        return xosc.FollowTrajectoryAction(traj, xosc.FollowingMode.follow)
 
     raise OSCBuildError("未知行为类型: %s" % b.kind)
 
@@ -235,11 +288,14 @@ def _make_trigger(t: TriggerSpec, fallback_entity: str):
     if t.kind == TriggerKind.TIME_TO_COLLISION:
         if not t.entity_ref:
             raise OSCBuildError("time_to_collision 需要 entity_ref")
+        # 用 entity 指定目标，而不是硬塞一个默认位置。
+        # 之前无论传什么 entity_ref 都输出 WorldPosition(0,0,0)，
+        # 导致 TTC 实际是在算"到世界原点的碰撞时间"，语义完全错了。
         return xosc.EntityTrigger(
             name, t.delay, edge,
             xosc.TimeToCollisionCondition(
-                t.value, rule, freespace=False,
-                position=xosc.WorldPosition(0, 0, 0)), subject)
+                t.value, rule, freespace=False, entity=t.entity_ref),
+            subject)
 
     raise OSCBuildError("未知触发类型: %s" % t.kind)
 

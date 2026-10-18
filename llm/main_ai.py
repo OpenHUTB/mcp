@@ -5453,6 +5453,290 @@ async def export_sumo_demand(trajectory_path: str = "", out_path: str = "",
     return await export_sumo_demand_impl(trajectory_path, out_path, depart_interval)
 
 
+# ---------------------------------------------------------------------------
+# CARLA 落地：把生成的路网加载进 CARLA 并布景截图
+# ---------------------------------------------------------------------------
+
+async def run_road_in_carla_impl(layout: str = "straight",
+                                 params_json: str = "{}",
+                                 vehicle_count: int = 5,
+                                 capture: bool = True,
+                                 out_dir: str = "",
+                                 host: str = "127.0.0.1",
+                                 port: int = 2000) -> str:
+    """生成指定布局的路网，加载进 CARLA，布景并截图。"""
+    import json as _json
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    try:
+        from road_builder import DEFAULT_PARAMS, LAYOUT_TITLES, inspect_road, write
+    except ImportError as e:
+        return "❌ 缺少依赖 scenariogeneration：%s" % e
+
+    if layout not in DEFAULT_PARAMS:
+        return "❌ 未知布局 `%s`\n可用：%s" % (layout, ", ".join(sorted(DEFAULT_PARAMS)))
+
+    try:
+        params = _json.loads(params_json) if params_json else {}
+    except Exception as e:
+        return "❌ params_json 不是合法 JSON：%s" % e
+
+    base = Path(__file__).parent / "output" / "carla"
+    xodr_dir = base / "xodr"
+    shot_dir = Path(out_dir) if out_dir else (base / "shots" / layout)
+    xodr_dir.mkdir(parents=True, exist_ok=True)
+
+    xodr_path = xodr_dir / ("%s.xodr" % layout)
+    try:
+        write(layout, str(xodr_path), params)
+    except Exception as e:
+        return "❌ 路网生成失败：%s: %s" % (type(e).__name__, e)
+
+    info = inspect_road(str(xodr_path))
+    if not info["valid"]:
+        return "❌ 路网文件无效：%s" % info["error"]
+
+    try:
+        import carla_runner as CR
+    except ImportError as e:
+        return ("❌ 无法导入 carla_runner（需要 carla 包）：%s\n"
+                "  请确认已安装 CARLA 的 PythonAPI，且 CarlaUE4 已启动。" % e)
+
+    try:
+        client = CR.connect(host, port)
+    except Exception as e:
+        return "❌ %s" % e
+
+    try:
+        world = CR.load_xodr_world(client, str(xodr_path))
+        CR.clear_actors(world)
+        vehicles = CR.spawn_vehicles(world, vehicle_count)
+        images = CR.capture_views(world, str(shot_dir)) if capture else []
+    except Exception as e:
+        app_logger.error("❌ CARLA 执行失败: %s" % e)
+        return "❌ CARLA 执行失败：%s: %s" % (type(e).__name__, e)
+
+    m = world.get_map()
+    lines = [
+        "✅ 路网已在 CARLA 中运行",
+        "",
+        "📐 布局：%s（%s）" % (layout, LAYOUT_TITLES[layout]),
+        "📁 xodr：%s（%d 字节）" % (xodr_path, info["size_bytes"]),
+        "🗺️  地图：%s" % m.name,
+        "🛣️  道路 %d 条，几何 %d 段，生成点 %d 个"
+        % (info["road_count"], info["geometry_count"], len(m.get_spawn_points())),
+        "🚗 已布景车辆：%d 辆" % len(vehicles),
+    ]
+    prof = None
+    for r in info["roads"]:
+        if len(r.get("lane_profile", [])) > 1:
+            prof = r["lane_profile"]
+            break
+    if prof:
+        lines.append("🔀 车道数变化：" + " -> ".join(
+            "s=%s 左%d右%d" % (x["s"], x["left"], x["right"]) for x in prof))
+    if images:
+        lines.append("")
+        lines.append("📸 截图：")
+        for p in images:
+            lines.append("   - %s" % p)
+    return "\n".join(lines)
+
+
+async def list_carla_maps_impl(host: str = "127.0.0.1", port: int = 2000) -> str:
+    """列出 CARLA 当前可用的内置地图与状态。"""
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    try:
+        import carla_runner as CR
+    except ImportError as e:
+        return "❌ 无法导入 carla_runner（需要 carla 包）：%s" % e
+
+    try:
+        client = CR.connect(host, port)
+    except Exception as e:
+        return "❌ %s" % e
+
+    lines = ["✅ CARLA 已连接", "", "服务端版本：%s" % client.get_server_version()]
+    try:
+        world = client.get_world()
+        lines.append("当前地图：%s" % world.get_map().name)
+    except Exception:
+        pass
+    try:
+        maps = client.get_available_maps()
+        lines.append("")
+        lines.append("可用内置地图（%d 个）：" % len(maps))
+        for m in maps:
+            lines.append("   - %s" % m)
+    except Exception as e:
+        lines.append("取不到地图列表：%s" % e)
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def run_road_in_carla(layout: str = "straight", params_json: str = "{}",
+                            vehicle_count: int = 5, capture: bool = True,
+                            out_dir: str = "", host: str = "127.0.0.1",
+                            port: int = 2000) -> str:
+    """把生成的路网加载进 CARLA 运行，布景并截图（需要 CarlaUE4 已启动）。
+
+    这是 generate_rich_xodr 的落地版本：生成 .xodr -> 用 CARLA 的
+    generate_opendrive_world 建成可驾驶世界 -> 在生成点放车 -> 相机截图。
+
+    Args:
+        layout: 路网布局，见 list_road_layouts
+        params_json: 覆盖默认参数的 JSON
+        vehicle_count: 布景车辆数
+        capture: 是否截图
+        out_dir: 截图输出目录
+        host/port: CARLA 服务地址
+    """
+    return await run_road_in_carla_impl(layout, params_json, vehicle_count,
+                                        capture, out_dir, host, port)
+
+
+@mcp.tool()
+async def list_carla_maps(host: str = "127.0.0.1", port: int = 2000) -> str:
+    """列出 CARLA 服务状态与可用内置地图。"""
+    return await list_carla_maps_impl(host, port)
+
+
+# ---------------------------------------------------------------------------
+# OpenSCENARIO 场景播放
+# ---------------------------------------------------------------------------
+
+async def run_scenario_in_carla_impl(template: str = "lead_brake",
+                                     xosc_path: str = "",
+                                     xodr_layout: str = "straight",
+                                     duration: float = 0.0,
+                                     capture_times: str = "2,5",
+                                     out_dir: str = "",
+                                     host: str = "127.0.0.1",
+                                     port: int = 2000) -> str:
+    """把生成的 .xosc 在 CARLA 里播放并截图。"""
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    base = Path(__file__).parent / "output" / "xosc_run"
+    base.mkdir(parents=True, exist_ok=True)
+
+    # 1) 准备 .xosc
+    if xosc_path:
+        p = Path(xosc_path)
+        if not p.is_absolute():
+            p = Path(__file__).parent / xosc_path
+        if not p.exists():
+            return "❌ 场景文件不存在：%s" % p
+        xosc_file = p
+    else:
+        try:
+            from scenario_templates import TEMPLATES, build
+            from osc_builder import write_scenario
+        except ImportError as e:
+            return "❌ 缺少依赖 scenariogeneration：%s" % e
+        if template not in TEMPLATES:
+            return "❌ 未知模板 `%s`\n可用：%s" % (template, ", ".join(sorted(TEMPLATES)))
+        spec = build(template, seed=1)
+        xosc_file = base / ("%s.xosc" % template)
+        write_scenario(spec, str(xosc_file))
+
+    try:
+        from xosc_player import parse_xosc, play, summarize
+        import carla_runner as CR
+    except ImportError as e:
+        return "❌ 导入播放器失败（需要 carla 包）：%s" % e
+
+    try:
+        sc = parse_xosc(str(xosc_file))
+    except Exception as e:
+        return "❌ 解析 .xosc 失败：%s: %s" % (type(e).__name__, e)
+
+    # 2) 建世界（LanePosition 需要路网）
+    try:
+        from road_builder import DEFAULT_PARAMS, inspect_road, write
+    except ImportError as e:
+        return "❌ 缺少 road_builder：%s" % e
+
+    if xodr_layout not in DEFAULT_PARAMS:
+        return "❌ 未知路网布局 `%s`" % xodr_layout
+    xodr_dir = base / "xodr"
+    xodr_dir.mkdir(parents=True, exist_ok=True)
+    xodr_file = xodr_dir / ("%s.xodr" % xodr_layout)
+    write(xodr_layout, str(xodr_file))
+    info = inspect_road(str(xodr_file))
+    if not info["valid"]:
+        return "❌ 路网无效：%s" % info["error"]
+
+    # 3) 连接并播放
+    try:
+        client = CR.connect(host, port)
+        world = CR.load_xodr_world(client, str(xodr_file))
+        CR.clear_actors(world)
+    except Exception as e:
+        return "❌ CARLA 准备失败：%s" % e
+
+    caps = []
+    for part in str(capture_times or "").replace("，", ",").split(","):
+        part = part.strip()
+        if part:
+            try:
+                caps.append(float(part))
+            except ValueError:
+                pass
+
+    shot_dir = Path(out_dir) if out_dir else (base / "shots" / template)
+    try:
+        res = play(world, sc,
+                   duration=(duration if duration > 0 else None),
+                   capture_at=caps, out_dir=str(shot_dir),
+                   width=960, height=540)
+    except Exception as e:
+        app_logger.error("❌ 场景播放失败: %s" % e)
+        return "❌ 播放失败：%s: %s" % (type(e).__name__, e)
+
+    return "✅ OpenSCENARIO 场景已在 CARLA 中播放\n\n" + summarize(res)
+
+
+@mcp.tool()
+async def run_scenario_in_carla(template: str = "lead_brake",
+                                xosc_path: str = "",
+                                xodr_layout: str = "straight",
+                                duration: float = 0.0,
+                                capture_times: str = "2,5",
+                                out_dir: str = "",
+                                host: str = "127.0.0.1",
+                                port: int = 2000) -> str:
+    """在 CARLA 里播放生成的 OpenSCENARIO 场景并截图（需要 CarlaUE4 已启动）。
+
+    这是轻量播放器：解析 .xosc 的实体与时间触发，按 StartTrigger 下发
+    速度动作，跑固定时长并截图。只覆盖本项目模板能表达的子集——
+    时距/距离等 EntityTrigger、变道、跟驰会记入"未执行"而不是静默跳过。
+
+    Args:
+        template: 场景模板名（与 xosc_path 二选一）
+        xosc_path: 直接指定 .xosc 文件
+        xodr_layout: 用哪种路网承载（LanePosition 需要路网才能解析）
+        duration: 播放时长（0 表示用场景自己的 StopTrigger）
+        capture_times: 截图时刻，逗号分隔，如 "2,5,8"
+        out_dir: 截图目录
+    """
+    return await run_scenario_in_carla_impl(template, xosc_path, xodr_layout,
+                                            duration, capture_times, out_dir,
+                                            host, port)
+
+
 def _resolve_actor_by_id(actor_id):
     """按 ID 解析 CARLA actor。
 
@@ -6540,6 +6824,62 @@ class FastMCPGitHubAssistant:
                         "required": ["trajectory_path"]
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_road_in_carla",
+                    "description": "把生成的路网加载进 CARLA 运行并截图。生成 .xodr 后用 CARLA 的 generate_opendrive_world 建成可驾驶世界，在生成点放车，相机取图。需要 CarlaUE4.exe 已启动。当用户要求'把路网跑起来'、'在CARLA里看看这个路网'、'加载自定义地图'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "layout": {"type": "string", "description": "路网布局名", "enum": ["straight", "highway_curve", "s_curve", "cross_junction", "t_junction", "on_ramp_merge", "off_ramp_diverge"], "default": "straight"},
+                            "params_json": {"type": "string", "description": "覆盖默认参数的 JSON", "default": "{}"},
+                            "vehicle_count": {"type": "integer", "description": "布景车辆数", "default": 5},
+                            "capture": {"type": "boolean", "description": "是否截图", "default": True},
+                            "out_dir": {"type": "string", "description": "截图输出目录", "default": ""},
+                            "host": {"type": "string", "description": "CARLA 服务地址", "default": "127.0.0.1"},
+                            "port": {"type": "integer", "description": "CARLA 端口", "default": 2000}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_carla_maps",
+                    "description": "列出 CARLA 服务状态与可用内置地图。当用户询问'CARLA连上了吗'、'有哪些地图'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "host": {"type": "string", "description": "CARLA 服务地址", "default": "127.0.0.1"},
+                            "port": {"type": "integer", "description": "CARLA 端口", "default": 2000}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_scenario_in_carla",
+                    "description": "在 CARLA 里播放生成的 OpenSCENARIO(.xosc) 场景并截图。解析场景的实体与时间触发，按 StartTrigger 下发速度动作，跑固定时长取图。需要 CarlaUE4.exe 已启动。当用户要求'把这个场景跑起来'、'在CARLA里播放场景'时使用。注意：时距/距离触发、变道、跟驰不在轻量播放器范围内，会明确报告未执行。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "template": {"type": "string", "description": "场景模板名，与 xosc_path 二选一", "default": "lead_brake"},
+                            "xosc_path": {"type": "string", "description": "直接指定 .xosc 文件路径", "default": ""},
+                            "xodr_layout": {"type": "string", "description": "承载场景的路网布局", "enum": ["straight", "highway_curve", "s_curve", "cross_junction", "t_junction", "on_ramp_merge", "off_ramp_diverge"], "default": "straight"},
+                            "duration": {"type": "number", "description": "播放时长秒数，0 表示用场景自身 StopTrigger", "default": 0.0},
+                            "capture_times": {"type": "string", "description": "截图时刻，逗号分隔", "default": "2,5"},
+                            "out_dir": {"type": "string", "description": "截图输出目录", "default": ""},
+                            "host": {"type": "string", "description": "CARLA 服务地址", "default": "127.0.0.1"},
+                            "port": {"type": "integer", "description": "CARLA 端口", "default": 2000}
+                        },
+                        "required": []
+                    }
+                }
             }
         ] 
 
@@ -7142,6 +7482,38 @@ class FastMCPGitHubAssistant:
                     trajectory_path=arguments.get("trajectory_path", ""),
                     out_path=arguments.get("out_path", ""),
                     depart_interval=arguments.get("depart_interval", 0.5)
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "run_road_in_carla":
+                result = await run_road_in_carla_impl(
+                    layout=arguments.get("layout", "straight"),
+                    params_json=arguments.get("params_json", "{}"),
+                    vehicle_count=arguments.get("vehicle_count", 5),
+                    capture=arguments.get("capture", True),
+                    out_dir=arguments.get("out_dir", ""),
+                    host=arguments.get("host", "127.0.0.1"),
+                    port=arguments.get("port", 2000)
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "run_scenario_in_carla":
+                result = await run_scenario_in_carla_impl(
+                    template=arguments.get("template", "lead_brake"),
+                    xosc_path=arguments.get("xosc_path", ""),
+                    xodr_layout=arguments.get("xodr_layout", "straight"),
+                    duration=arguments.get("duration", 0.0),
+                    capture_times=arguments.get("capture_times", "2,5"),
+                    out_dir=arguments.get("out_dir", ""),
+                    host=arguments.get("host", "127.0.0.1"),
+                    port=arguments.get("port", 2000)
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "list_carla_maps":
+                result = await list_carla_maps_impl(
+                    host=arguments.get("host", "127.0.0.1"),
+                    port=arguments.get("port", 2000)
                 )
                 return {"success": True, "data": result}
 

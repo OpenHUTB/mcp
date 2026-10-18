@@ -53,10 +53,16 @@ def _ped(eid: str, x: float, y: float, speed: float = 1.4) -> EntitySpec:
 
 
 def _speed(eid: str, target: float, shape: DynamicsShape = DynamicsShape.LINEAR,
-           value: float = 2.0) -> BehaviorSpec:
+           value: float = 2.0, ref: str = None) -> BehaviorSpec:
+    """构造速度行为。
+
+    ref 不为空时表示**相对速度**：目标是"参照实体速度 + target"。
+    """
     return BehaviorSpec(kind=BehaviorKind.SPEED, entity_ref=eid,
                         target_speed=target, dynamics_shape=shape,
-                        dynamics_value=value)
+                        dynamics_value=value,
+                        relative_speed=bool(ref),
+                        speed_entity_ref=ref)
 
 
 def _lane_change(eid: str, delta: int, value: float = 1.6) -> BehaviorSpec:
@@ -415,6 +421,140 @@ def build_junction_light(p: Dict[str, Any]) -> ScenarioSpec:
 
 
 # =====================================================================
+# 模板 9：近距跟驰（TTC 触发减速）
+#   自车以明显高于前车的速度接近，当 TTC 低于阈值时减速到前车速度。
+#   用来验证 TimeToCollisionCondition + 相对位置语义。
+# =====================================================================
+def build_close_follow(p: Dict[str, Any]) -> ScenarioSpec:
+    ego_speed = float(p.get("ego_speed", 16.0))
+    lead_speed = float(p.get("lead_speed", 6.0))
+    gap = float(p.get("gap", 35.0))
+    ttc = float(p.get("ttc", 3.0))
+    brake_time = float(p.get("brake_time", 3.0))
+    duration = float(p.get("duration", 30.0))
+
+    return ScenarioSpec(
+        name="close_follow",
+        description="自车 %.1fm/s 接近 %.1fm/s 前车，TTC 低于 %.1fs 时减速"
+                    % (ego_speed, lead_speed, ttc),
+        entities=[_veh("ego", 50.0, ego_speed, LANE_R),
+                  _veh("lead", 50.0 + gap, lead_speed, LANE_R)],
+        # behaviors[i] 与 triggers[i] 按下标配对
+        behaviors=[_speed("ego", lead_speed, DynamicsShape.LINEAR, brake_time)],
+        triggers=[TriggerSpec(kind=TriggerKind.TIME_TO_COLLISION, value=ttc,
+                              rule=Rule.LESS_THAN, entity_ref="lead",
+                              triggering_entity="ego", name="ttc_brake")],
+        duration=duration, template="close_follow",
+        params={"ego_speed": ego_speed, "lead_speed": lead_speed,
+                "gap": gap, "ttc": ttc},
+        tags=["追尾", "TTC", "跟驰"],
+    )
+
+
+# =====================================================================
+# 模板 10：超车
+#   接近慢车 -> 向左变道 -> 以相对速度超越 -> 回到原车道。
+#   用来验证 ReachPositionCondition + 相对速度动作 + 连续变道。
+# =====================================================================
+def build_overtake(p: Dict[str, Any]) -> ScenarioSpec:
+    ego_speed = float(p.get("ego_speed", 14.0))
+    lead_speed = float(p.get("lead_speed", 7.0))
+    gap = float(p.get("gap", 40.0))
+    delta = float(p.get("delta", 4.0))       # 超越时相对前车的速度差
+    lc_time = float(p.get("lc_time", 1.8))
+    duration = float(p.get("duration", 35.0))
+
+    return ScenarioSpec(
+        name="overtake",
+        description="接近 %.1fm 前方的慢车后向左变道，以 +%.1fm/s 超越后回到原车道"
+                    % (gap, delta),
+        entities=[_veh("ego", 50.0, ego_speed, LANE_R),
+                  _veh("lead", 50.0 + gap, lead_speed, LANE_R),
+                  _veh("oncoming", 50.0 + gap + 80.0, 10.0, LANE_ONCOMING)],
+        behaviors=[
+            # 1) 接近到 25m 内向左变道
+            _lane_change("ego", +1, lc_time),
+            # 2) 相对前车 +delta 超车（相对速度动作）
+            _speed("ego", delta, DynamicsShape.LINEAR, 4.0, ref="lead"),
+            # 3) 拉开到 30m 后回到原车道
+            _lane_change("ego", -1, lc_time),
+        ],
+        triggers=[
+            TriggerSpec(kind=TriggerKind.DISTANCE, value=25.0,
+                        rule=Rule.LESS_THAN,
+                        position=PositionSpec.lane(s=50.0 + gap, lane_id=LANE_R),
+                        triggering_entity="ego", name="approach"),
+            TriggerSpec(kind=TriggerKind.TIME, value=1.0,
+                        rule=Rule.GREATER_THAN,
+                        triggering_entity="ego", name="speed_up"),
+            TriggerSpec(kind=TriggerKind.REACH_POSITION, tolerance=3.0,
+                        position=PositionSpec.lane(s=50.0 + gap + 30.0,
+                                                   lane_id=LANE_L),
+                        triggering_entity="ego", name="return"),
+        ],
+        duration=duration, template="overtake",
+        params={"ego_speed": ego_speed, "lead_speed": lead_speed,
+                "gap": gap, "delta": delta},
+        tags=["超车", "变道", "相对速度"],
+    )
+
+
+# =====================================================================
+# 模板 11：紧急避让（轨迹跟随）
+#   前方本车道有静止障碍，自车按一条 S 形轨迹换道绕行。
+#   用 FollowTrajectoryAction 表达任意形状的避让路径。
+# =====================================================================
+def build_evasive_swerve(p: Dict[str, Any]) -> ScenarioSpec:
+    ego_speed = float(p.get("ego_speed", 12.0))
+    obstacle_gap = float(p.get("obstacle_gap", 45.0))
+    lateral = float(p.get("lateral", 3.6))       # 横向避让量（约一个车道）
+    swerve_len = float(p.get("swerve_len", 30.0))
+    duration = float(p.get("duration", 30.0))
+
+    s0 = 50.0
+    s_obs = s0 + obstacle_gap
+    # 右车道中心线的横向坐标。straight 路网（lane_width=3.5、2 车道）实测约 1.8m，
+    # 这里跟着 lane_width 走，默认参数下即 1.75。
+    y0 = float(p.get("lane_center_y", 1.75))
+    # 五个关键点：直行 -> 开始避让 -> 越过障碍 -> 回正 -> 继续直行
+    pts = [
+        [0.0, s0, y0],
+        [obstacle_gap / ego_speed * 0.35, s0 + swerve_len * 0.4, y0 + lateral],
+        [obstacle_gap / ego_speed * 0.65, s_obs, y0 + lateral],
+        [obstacle_gap / ego_speed * 0.90, s_obs + swerve_len * 0.5, y0],
+        [obstacle_gap / ego_speed * 1.30, s_obs + swerve_len * 1.4, y0],
+    ]
+
+    return ScenarioSpec(
+        name="evasive_swerve",
+        description="前方 %.1fm 有静止障碍，自车按 S 形轨迹换道绕行"
+                    % obstacle_gap,
+        entities=[_veh("ego", s0, ego_speed, LANE_R),
+                  _veh("obstacle", s_obs, 0.0, LANE_R),
+                  _veh("oncoming", s0 + 60.0, 9.0, LANE_ONCOMING)],
+        behaviors=[
+            BehaviorSpec(kind=BehaviorKind.FOLLOW_TRAJECTORY, entity_ref="ego",
+                         trajectory_points=pts),
+            _speed("oncoming", 9.0, DynamicsShape.STEP, 0.0),
+        ],
+        triggers=[
+            # 轨迹第一点就是车辆初始位置，所以要尽早触发；
+            # 延迟太久车会开过起点，前瞻点就落到车后了。
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0,
+                        rule=Rule.GREATER_THAN,
+                        triggering_entity="ego", name="swerve_start"),
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0,
+                        rule=Rule.GREATER_THAN,
+                        triggering_entity="oncoming", name="oncoming_start"),
+        ],
+        duration=duration, template="evasive_swerve",
+        params={"ego_speed": ego_speed, "obstacle_gap": obstacle_gap,
+                "lateral": lateral},
+        tags=["避让", "轨迹跟随", "紧急"],
+    )
+
+
+# =====================================================================
 # 注册表
 # =====================================================================
 _BUILDERS: Dict[str, Callable[[Dict[str, Any]], ScenarioSpec]] = {
@@ -426,6 +566,9 @@ _BUILDERS: Dict[str, Callable[[Dict[str, Any]], ScenarioSpec]] = {
     "wrong_way": build_wrong_way,
     "unprotected_turn": build_unprotected_turn,
     "junction_light": build_junction_light,
+    "close_follow": build_close_follow,
+    "overtake": build_overtake,
+    "evasive_swerve": build_evasive_swerve,
 }
 
 TEMPLATES: Dict[str, TemplateSpec] = {
@@ -504,6 +647,35 @@ TEMPLATES: Dict[str, TemplateSpec] = {
             "vehicle_count": ParamRange(kind="int", low=2, high=6),
             "ego_speed": ParamRange(kind="uniform", low=6.0, high=14.0, unit="m/s"),
             "cross_speed": ParamRange(kind="uniform", low=6.0, high=14.0, unit="m/s"),
+        }),
+    "close_follow": TemplateSpec(
+        name="close_follow", title="近距跟驰",
+        description="高速接近慢车，TTC 低于阈值时减速跟驰",
+        carla_function="scenario_lead_vehicle", tags=["追尾", "TTC"],
+        params={
+            "ego_speed": ParamRange(kind="uniform", low=14.0, high=22.0, unit="m/s"),
+            "lead_speed": ParamRange(kind="uniform", low=3.0, high=9.0, unit="m/s"),
+            "gap": ParamRange(kind="uniform", low=25.0, high=50.0, unit="m"),
+            "ttc": ParamRange(kind="uniform", low=2.0, high=4.5, unit="s"),
+        }),
+    "evasive_swerve": TemplateSpec(
+        name="evasive_swerve", title="紧急避让",
+        description="前方静止障碍，自车按 S 形轨迹换道绕行",
+        carla_function="scenario_low_overlap", tags=["避让", "轨迹跟随"],
+        params={
+            "ego_speed": ParamRange(kind="uniform", low=10.0, high=16.0, unit="m/s"),
+            "obstacle_gap": ParamRange(kind="uniform", low=35.0, high=60.0, unit="m"),
+            "lateral": ParamRange(kind="uniform", low=3.2, high=4.0, unit="m"),
+        }),
+    "overtake": TemplateSpec(
+        name="overtake", title="超车",
+        description="接近慢车后向左变道，相对速度超越后回到原车道",
+        carla_function="scenario_cut_in", tags=["超车", "变道"],
+        params={
+            "ego_speed": ParamRange(kind="uniform", low=12.0, high=18.0, unit="m/s"),
+            "lead_speed": ParamRange(kind="uniform", low=5.0, high=10.0, unit="m/s"),
+            "gap": ParamRange(kind="uniform", low=30.0, high=55.0, unit="m"),
+            "delta": ParamRange(kind="uniform", low=3.0, high=6.0, unit="m/s"),
         }),
 }
 

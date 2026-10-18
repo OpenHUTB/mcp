@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+
+<html class="writer-html5" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="IE=edge" http-equiv="X-UA-Compatible"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<link href="../img/favicon.ico" rel="shortcut icon"/>
+<title>实测数据与限制 - OpenHUTB 文档模板</title>
+<link href="../css/theme.css" rel="stylesheet"/>
+<link href="../css/theme_extra.css" rel="stylesheet"/>
+<link href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" rel="stylesheet"/>
+<link href="../extra.css" rel="stylesheet"/>
+<script>
+        // Current page data
+        var mkdocs_page_name = "\u5b9e\u6d4b\u6570\u636e\u4e0e\u9650\u5236";
+        var mkdocs_page_input_path = "limits.md";
+        var mkdocs_page_url = null;
+      </script>
+<!--[if lt IE 9]>
+      <script src="../js/html5shiv.min.js"></script>
+    <![endif]-->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+<script>hljs.highlightAll();</script>
+</head>
+<body class="wy-body-for-nav" role="document">
+<div class="wy-grid-for-nav">
+<nav class="wy-nav-side stickynav" data-toggle="wy-nav-shift">
+<div class="wy-side-scroll">
+<div class="wy-side-nav-search">
+<a class="icon icon-home" href=".."> OpenHUTB 文档模板
+        </a><div role="search">
+<form action="../search.html" class="wy-form" id="rtd-search-form" method="get">
+<input aria-label="Search docs" name="q" placeholder="搜索文档" title="Type search term here" type="text"/>
+</form>
+</div>
+</div>
+<div aria-label="Navigation menu" class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation">
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="..">首页</a>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../setup/">环境配置</a>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../scenario/">场景生成</a>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../road/">路网生成</a>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../carla/">CARLA 执行</a>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../trajectory/">轨迹合成</a>
+</li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../gallery/">效果展示</a>
+</li>
+</ul>
+<ul class="current">
+<li class="toctree-l1 current"><a class="reference internal current" href="#">实测数据与限制</a>
+<ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="#1-实测数据">1. 实测数据</a>
+<ul>
+<li class="toctree-l3"><a class="reference internal" href="#11-场景">1.1 场景</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#12-路网与-carla">1.2 路网与 CARLA</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#13-轨迹">1.3 轨迹</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#14-工程一致性">1.4 工程一致性</a>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#2-已知限制">2. 已知限制</a>
+<ul>
+<li class="toctree-l3"><a class="reference internal" href="#21-播放器是子集实现">2.1 播放器是子集实现</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#22-路口环是折线拼接">2.2 路口环是折线拼接</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#23-carla-客户端断言">2.3 CARLA 客户端断言</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#24-测试环境">2.4 测试环境</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#25-轨迹数据">2.5 轨迹数据</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#26-轨迹到-sumo">2.6 轨迹到 SUMO</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#27-openscenario-默认版本">2.7 OpenSCENARIO 默认版本</a>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#3-参考">3. 参考</a>
+</li>
+</ul>
+</li>
+</ul>
+</div>
+</div>
+</nav>
+<section class="wy-nav-content-wrap" data-toggle="wy-nav-shift">
+<nav aria-label="Mobile navigation menu" class="wy-nav-top" role="navigation">
+<i class="fa fa-bars" data-toggle="wy-nav-top"></i>
+<a href="..">OpenHUTB 文档模板</a>
+</nav>
+<div class="wy-nav-content">
+<div class="rst-content"><div aria-label="breadcrumbs navigation" role="navigation">
+<ul class="wy-breadcrumbs">
+<li><a aria-label="Docs" class="icon icon-home" href=".."></a></li>
+<li class="breadcrumb-item active">实测数据与限制</li>
+<li class="wy-breadcrumbs-aside">
+<a href="https://github.com/OpenHUTB/template/edit/master/docs/limits.md"> 编辑页面</a>
+</li>
+</ul>
+<hr/>
+</div>
+<div class="document" itemscope="itemscope" itemtype="http://schema.org/Article" role="main">
+<div class="section" itemprop="articleBody">
+<div><h1 id="实测数据与已知限制">实测数据与已知限制</h1>
+<h2 id="1-实测数据">1. 实测数据</h2>
+<p>测试环境：Windows 11 + Python 3.10 + CARLA 0.9.16 + AMD Radeon 880M 集显。</p>
+<h3 id="11-场景">1.1 场景</h3>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OSC 生成器往返解析</td>
+<td>4 场景 × 4 版本 = <strong>16/16 通过</strong></td>
+</tr>
+<tr>
+<td>场景模板编译与校验</td>
+<td><strong>8/8 通过</strong>，同 seed 指纹一致</td>
+</tr>
+<tr>
+<td>批量生成 50 个</td>
+<td><strong>6.86 s</strong>（要求 &lt; 60 s）</td>
+</tr>
+<tr>
+<td>批量生成 80 个混合</td>
+<td><strong>10.89 s</strong></td>
+</tr>
+<tr>
+<td>重复场景</td>
+<td><strong>0</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="12-路网与-carla">1.2 路网与 CARLA</h3>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>布局生成</td>
+<td><strong>7/7</strong> 通过几何校验</td>
+</tr>
+<tr>
+<td>CARLA 路网加载</td>
+<td><strong>7/7</strong> 成功，每种约 7 秒（含 2 秒世界加载）</td>
+</tr>
+<tr>
+<td>场景播放</td>
+<td><strong>8/8</strong> 模板跑通，未支持项 0</td>
+</tr>
+</tbody>
+</table>
+<h3 id="13-轨迹">1.3 轨迹</h3>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>轨迹导入</td>
+<td>CSV / FCD / JSON <strong>三种格式全部通过</strong></td>
+</tr>
+<tr>
+<td>批量合成 100 条</td>
+<td><strong>0.17 s</strong>（595 条/秒）</td>
+</tr>
+<tr>
+<td>合成成功率</td>
+<td><strong>100/100</strong></td>
+</tr>
+<tr>
+<td>速度分布 KS 距离</td>
+<td><strong>0.029</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="14-工程一致性">1.4 工程一致性</h3>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>工具装饰器</td>
+<td>51 个</td>
+</tr>
+<tr>
+<td><code>self.tools</code> 列表</td>
+<td>60 个</td>
+</tr>
+<tr>
+<td>派发链分支</td>
+<td>61 个</td>
+</tr>
+<tr>
+<td>"可见但调用失败"的工具</td>
+<td><strong>0 个</strong>（修复前 5 个）</td>
+</tr>
+<tr>
+<td>重复派发键</td>
+<td>0</td>
+</tr>
+<tr>
+<td>调用了未定义函数的分支</td>
+<td>0</td>
+</tr>
+</tbody>
+</table>
+<hr/>
+<h2 id="2-已知限制">2. 已知限制</h2>
+<h3 id="21-播放器是子集实现">2.1 播放器是子集实现</h3>
+<p>不支持的条件与动作会记入 <code>unsupported</code> 并明确返回，不会静默跳过。</p>
+<table>
+<thead>
+<tr>
+<th>类别</th>
+<th>不支持项</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>条件</td>
+<td><code>CollisionCondition</code>、<code>TimeToCollisionCondition</code>、<code>RelativeSpeedCondition</code>、<code>AccelerationCondition</code>、<code>OffroadCondition</code>、<code>EndOfRoadCondition</code></td>
+</tr>
+<tr>
+<td>动作</td>
+<td><code>FollowTrajectoryAction</code></td>
+</tr>
+<tr>
+<td>结构</td>
+<td><code>Story</code> 分支、<code>Catalog</code>、<code>TrafficSignalControllerAction</code></td>
+</tr>
+</tbody>
+</table>
+<p>即便支持的部分也有简化：</p>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>简化</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>跟驰</td>
+<td>用 P 控制，未实现 OSC 完整的时距控制与加速度限制</td>
+</tr>
+<tr>
+<td>变道</td>
+<td>用纯追踪，未做横向加速度约束</td>
+</tr>
+<tr>
+<td>速度动力学</td>
+<td><code>linear</code> 近似为分帧线性插值</td>
+</tr>
+<tr>
+<td>位置语义</td>
+<td><code>freespace</code> / <code>alongroute</code> 未实现，一律按直线距离</td>
+</tr>
+</tbody>
+</table>
+<h3 id="22-路口环是折线拼接">2.2 路口环是折线拼接</h3>
+<p><code>CommonJunctionCreator</code> 用直线连接各臂端点，十字路口呈现为<strong>菱形环</strong>
+而不是正方形环。拓扑正确、可通行，但几何不是真实交叉口的样子。</p>
+<h3 id="23-carla-客户端断言">2.3 CARLA 客户端断言</h3>
+<p>一个进程内连续切换多个世界会偶发 <code>_episode != nullptr</code> 断言（引擎侧问题）。
+目前的规避方式是每种布局跑独立进程，未在代码里根治。</p>
+<h3 id="24-测试环境">2.4 测试环境</h3>
+<p>集显 + <code>-quality-level=Low</code> 下完成，未在独立显卡 / 高画质复验。</p>
+<h3 id="25-轨迹数据">2.5 轨迹数据</h3>
+<p>当前没有真实车队数据，测试用符合 NGSIM 格式的合成样本
+（3 条 / 180 帧 / 10 Hz）。拿到实采数据后需要重跑分布对比，
+确认增强强度是否合适。</p>
+<p><code>duration</code> 的 KS 距离偏大（0.68），原因是 3 条种子时长完全相同、
+真实方差为 0，这个指标在退化分布上没有意义。</p>
+<h3 id="26-轨迹到-sumo">2.6 轨迹到 SUMO</h3>
+<p>只实现了起点终点法（按轨迹首尾生成 flow），没有按 edge 序列精确还原路径。</p>
+<h3 id="27-openscenario-默认版本">2.7 OpenSCENARIO 默认版本</h3>
+<p>默认输出 OSC 1.1。若下游播放器只支持 1.0，需要改默认值并补行人 <code>model</code> 定义。</p>
+<hr/>
+<h2 id="3-参考">3. 参考</h2>
+<table>
+<thead>
+<tr>
+<th>内容</th>
+<th>链接</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CARLA</td>
+<td><a href="https://carla.org/">https://carla.org/</a></td>
+</tr>
+<tr>
+<td>OpenSCENARIO</td>
+<td><a href="https://www.asam.net/standards/detail/openscenario/">https://www.asam.net/standards/detail/openscenario/</a></td>
+</tr>
+<tr>
+<td>OpenDRIVE</td>
+<td><a href="https://www.asam.net/standards/detail/opendrive/">https://www.asam.net/standards/detail/opendrive/</a></td>
+</tr>
+<tr>
+<td>scenariogeneration</td>
+<td><a href="https://github.com/pyoscx/scenariogeneration">https://github.com/pyoscx/scenariogeneration</a></td>
+</tr>
+<tr>
+<td>NGSIM</td>
+<td><a href="https://ops.fhwa.dot.gov/trafficanalysistools/ngsim.htm">https://ops.fhwa.dot.gov/trafficanalysistools/ngsim.htm</a></td>
+</tr>
+</tbody>
+</table></div>
+</div>
+</div><footer>
+<div aria-label="Footer Navigation" class="rst-footer-buttons" role="navigation">
+<a class="btn btn-neutral float-left" href="../gallery/" title="效果展示"><span class="icon icon-circle-arrow-left"></span> 前一页</a>
+</div>
+<hr>
+<div role="contentinfo">
+<!-- Copyright etc -->
+<p>OpenHUTB 版权所有 © 2026</p>
+</div>
+</hr></footer>
+</div>
+</div>
+</section>
+</div>
+<div aria-label="Versions" class="rst-versions" role="note">
+<span class="rst-current-version" data-toggle="rst-current-version">
+<span>
+<a href="https://github.com/OpenHUTB/template" style="color: #fcfcfc">OpenHUTB</a>
+</span>
+<span><a href="../gallery/" style="color: #fcfcfc">« 前一页</a></span>
+</span>
+</div>
+<script src="../js/jquery-3.6.0.min.js"></script>
+<script>var base_url = "..";</script>
+<script src="../js/theme_extra.js"></script>
+<script src="../js/theme.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.4/MathJax.js?config=TeX-AMS-MML_HTMLorMML"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/raphael/2.2.7/raphael.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-sequence-diagrams/1.0.6/sequence-diagram-min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/flowchart/1.6.5/flowchart.min.js"></script>
+<script src="../js/umlconvert.js"></script>
+<script src="../search/main.js"></script>
+<script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+</body>
+</html>

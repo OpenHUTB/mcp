@@ -59,8 +59,14 @@ copyright: OpenHUTB 版权所有 &copy; {year}
 
 nav:
 - 首页: 'index.md'
-- mkdocs简介: 'mkdocs.md'
-- 新增特性: '新增特性.md'
+- New Features: 'new-features.md'
+- 环境配置: 'setup.md'
+- 场景生成: 'scenario.md'
+- 路网生成: 'road.md'
+- CARLA 执行: 'carla.md'
+- 轨迹合成: 'trajectory.md'
+- 效果展示: 'gallery.md'
+- 实测数据与限制: 'limits.md'
 
 # - mdx_math 用于行内公式显示
 markdown_extensions:

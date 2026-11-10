@@ -39,6 +39,7 @@ title: 首页
 
 | 页面 | 内容 |
 |---|---|
+| [实现原理](implementation.md) | 分层架构、MCP 与 FastMCP、核心组件、代码组织、运行截图 |
 | [New Features](new-features.md) | 新增功能记录：能力、用法、示例、效果 |
 | [环境配置](setup.md) | 软硬件版本、依赖安装、API Key、CARLA 启动 |
 | [场景生成](scenario.md) | 8 个模板、参数、批量生成与校验 |

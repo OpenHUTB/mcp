@@ -60,6 +60,7 @@ copyright: OpenHUTB 版权所有 &copy; {year}
 nav:
 - 首页: 'index.md'
 - New Features: 'new-features.md'
+- 实现原理: 'implementation.md'
 - 环境配置: 'setup.md'
 - 场景生成: 'scenario.md'
 - 路网生成: 'road.md'

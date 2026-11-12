@@ -8,6 +8,134 @@ title: New Features
 
 ---
 
+## 2026-11 · OpenSCENARIO 播放器增强：位置解析 / 新条件 / 红绿灯 / 跟驰变道
+
+这一版补齐了播放器（`llm/src/xosc_player.py`）长期缺失的能力，并新增了
+`signal_phase` 模板、一键回归脚本和网页快捷按钮。
+
+### 能力
+
+- `LanePosition` 按 `roadId / laneId / s / offset` 正确解析（修复旧 bug）
+- 新增 6 类触发条件：加速度、驶出路网、路段末端、累计里程、相对距离、相对角度
+- 新增信号灯条件 `TrafficSignalCondition` 与动作 `TrafficSignalControllerAction`
+- 跟驰改为 **IDM**（智能驾驶员模型），变道加 **横向加速度 3 m/s² 限幅**
+- 条件求值改按 `TriggeringEntities` 选定主体（修复后车跟驰永不触发、直冲追尾）
+- 新增 `run_traffic_light_demo` 工具与 `signal_phase` 模板（模板总数 11 → 12）
+- 新增一键回归脚本 `llm/tools/run_regression.py`
+
+### 1. `LanePosition` 解析修复
+
+**之前的问题**：播放器把 `s` 和 `offset` 当成世界坐标 `x / y`，去最近路点里找，
+只要场景不是沿 x 轴铺的，车就会布到错误位置（甚至路外）。
+
+**现在**：先用 CARLA 的 `get_waypoint_xodr(roadId, laneId, s)` 精确解析，
+再按 OSC 约定沿车道左法向叠加 `offset`；解析失败才退化为"同车道里 s 最近"。
+同时 `run_scenario_in_carla` 增加了 `map_name` 参数，可以直接把场景放到
+`Town03` 等内置地图上（内置地图才有真实的红绿灯）。
+
+```text
+run_scenario_in_carla(template="signal_phase", map_name="Town03")
+```
+
+### 2. 新增 6 类触发条件
+
+| 条件 | 语义 | 实现 |
+|---|---|---|
+| `AccelerationCondition` | 自身加速度过阈值 | `get_acceleration()` 模长 |
+| `OffroadCondition` | 连续驶出路网 | 非道路路点判定 + 持续计时 |
+| `EndOfRoadCondition` | 到达路段末端 | 沿车道向前探测剩余距离 |
+| `TraveledDistanceCondition` | 累计里程 | 逐帧累计位移 |
+| `RelativeDistanceCondition` | 与参照实体距离 | 实体间直线距离 |
+| `RelativeAngleCondition` | 与参照实体航向夹角 | 航向差（自动抬到 OSC 1.3 导出） |
+
+生成侧同步支持：`scenario_ir` 增加对应 `TriggerKind`，`osc_builder` 负责
+编译成标准 XML，回读播放器时 `unsupported` 仍为 0。
+
+```python
+TriggerSpec(kind=TriggerKind.RELATIVE_DISTANCE, entity_ref="lead", value=15.0)
+TriggerSpec(kind=TriggerKind.TRAVELED_DISTANCE, value=30.0)
+```
+
+### 3. 红绿灯相位控制
+
+- 条件：取**自车前方最近的一盏红绿灯**的实际状态，与目标相位比较
+  （支持 `Red / 红 / 红灯` 等别名）
+- 动作：冻结信号灯并切换到指定相位（`green / yellow / red / off`）
+
+新增工具 `run_traffic_light_demo`：在地图里挑一盏灯，沿来车方向后退 35m
+布设自车，先冻结为红灯，到点切绿，自车按绿灯条件起步。
+
+```text
+run_traffic_light_demo(map_name="Town03", red_hold=4, capture_times="1,3,7,12")
+```
+
+实测输出（Town03）：
+
+```text
+t=0.05s  force_red   traffic_light
+t=0.05s  hold_red    speed=0.00
+t=4.05s  force_green traffic_light
+t=4.10s  go_green    speed=8.00
+```
+
+红灯期间自车停在停止线前，切绿后通过路口：
+
+![红绿灯：红灯停车](https://openhutb.github.io/mcp/img/2026-11-traffic-light-red.png)
+
+![红绿灯：绿灯通过](https://openhutb.github.io/mcp/img/2026-11-traffic-light-green.png)
+
+模板 `signal_phase` 则把同一套逻辑放进可复现的 `.xosc`，可直接在内置地图上跑：
+
+```text
+run_scenario_in_carla(template="signal_phase", map_name="Town03")
+```
+
+![信号灯模板：等待](https://openhutb.github.io/mcp/img/2026-11-signal-phase-red.png)
+
+![信号灯模板：起步](https://openhutb.github.io/mcp/img/2026-11-signal-phase-green.png)
+
+### 4. IDM 跟驰与横向加速度约束
+
+跟驰从 P 控制换成 IDM：
+
+```text
+a = a_max · [1 − (v/v0)^4 − (s*/gap)^2]
+s* = s0 + max(0, v·T + v·Δv / (2·√(a_max·b)))
+```
+
+其中 `a_max=2.0`、`b=3.0`、`T=1.2s`，`s0` 取动作里的跟驰距离
+（`LongitudinalDistanceAction.distance`，上限 40m），油门/刹车由期望加速度映射得到。
+前车急刹时自车先强减速，最终稳定在给定间距上：
+`lead_brake` 的 `distance=15 m`，自车停在约 20 m 中心距（15 m 净距），后车同样按 IDM 跟驰：
+
+![IDM 跟驰：前车急刹](https://openhutb.github.io/mcp/img/2026-11-idm-follow.png)
+<div align="center"><i>lead_brake t=15.0 s：前车已停，自车与后车都保持各自跟驰间距</i></div>
+
+变道时按 `ay = v²·κ ≤ 3 m/s²` 对转向做限幅（`κ ≈ 0.12·steer`），
+高速下的切入不再出现"瞬间横甩"：
+
+![变道：横向加速度限幅](https://openhutb.github.io/mcp/img/2026-11-lane-change.png)
+
+### 5. 一键回归脚本与网页快捷按钮
+
+`llm/tools/run_regression.py` 默认做离线回归（12 个模板 + 新增条件合成场景），
+加 `--carla` 直接连 CARLA 实跑：
+
+```text
+python llm/tools/run_regression.py
+python llm/tools/run_regression.py --carla --duration 5
+```
+
+实测：离线 **12/12** 模板结构校验通过、`unsupported=0`；CARLA 实跑
+11 个依赖自建路网的模板全部布景成功、无错误（`signal_phase` 需内置地图，
+由 `run_traffic_light_demo` 覆盖）。
+
+网页端 `http://127.0.0.1:3000/` 的"场景快捷按钮"面板顶部新增了
+**2026-11 新增功能** 分组，四个按钮分别对应红绿灯演示、红绿灯模板、
+IDM 跟驰与变道限幅，点击即可执行并回显截图路径。
+
+---
+
 ## 2026-10 · OpenSCENARIO 轨迹跟随
 
 ### 能力

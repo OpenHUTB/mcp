@@ -23,7 +23,7 @@ title: 首页
 | 功能 | MCP 工具 | 说明 |
 |---|---|---|
 | 场景模板生成 | `generate_scenario_from_template` | 按模板批量生成 `.xosc`，参数区间内随机 |
-| 列出场景模板 | `list_scenario_templates` | 返回 8 个模板及参数说明 |
+| 列出场景模板 | `list_scenario_templates` | 返回 12 个模板及参数说明 |
 | 场景校验 | `validate_scenario` | 结构往返解析 + 语义断言 |
 | 路网生成 | `generate_rich_xodr` | 生成 7 种布局的 `.xodr` |
 | 列出路网布局 | `list_road_layouts` | 返回布局名与默认参数 |
@@ -32,7 +32,8 @@ title: 首页
 | 分布对比 | `compare_trajectory_distribution` | KS 距离与 Wasserstein |
 | 导出 SUMO 需求 | `export_sumo_demand` | `.rou.xml` |
 | 路网进 CARLA | `run_road_in_carla` | 加载、布景、截图 |
-| 场景进 CARLA | `run_scenario_in_carla` | 播放 `.xosc` 并截图 |
+| 场景进 CARLA | `run_scenario_in_carla` | 播放 `.xosc` 并截图，支持 `map_name` 切内置地图 |
+| 红绿灯演示 | `run_traffic_light_demo` | 红灯停车 → 切绿 → 起步，带截图 |
 | CARLA 状态 | `list_carla_maps` | 版本、当前地图、地图列表 |
 
 ## 3. 文档导航
@@ -42,7 +43,7 @@ title: 首页
 | [实现原理](implementation.md) | 分层架构、MCP 与 FastMCP、核心组件、代码组织、运行截图 |
 | [New Features](new-features.md) | 新增功能记录：能力、用法、示例、效果 |
 | [环境配置](setup.md) | 软硬件版本、依赖安装、API Key、CARLA 启动 |
-| [场景生成](scenario.md) | 8 个模板、参数、批量生成与校验 |
+| [场景生成](scenario.md) | 12 个模板、参数、批量生成与校验 |
 | [路网生成](road.md) | 7 种布局、默认参数、几何校验 |
 | [CARLA 执行](carla.md) | 路网加载、场景播放、截图 |
 | [轨迹合成](trajectory.md) | 轨迹导入、增强算子、分布对比、SUMO 导出 |

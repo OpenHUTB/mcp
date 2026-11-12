@@ -9313,7 +9313,7 @@ def get_web_interface():
 
     <!-- ===== 周计划场景快捷按钮 ===== -->
     <div class="quick-panel">
-        <div class="quick-title">⚡ 场景快捷按钮（点击直接执行，无需输入）</div>
+        <div class="quick-title">⚡ 场景快捷按钮（点击直接执行，也可在对话框输入同名文字）</div>
 
         <div class="week-group">
             <div class="week-label"><span style="color:#e11d48;">🆕 2026-11 新增功能（OpenSCENARIO 播放器增强）</span></div>
@@ -9378,7 +9378,7 @@ def get_web_interface():
                 <button class="qbtn qbtn-util" onclick="runQuickTool('cleanup_scene', {}, this)">🧹 清理场景</button>
             </div>
         </div>
-        <div class="quick-note">💡 场景按钮基于当前地图自动选址，推荐 Town04（高速匝道/隧道/环岛均可）；Town03 地图不可用。蹲下/躺下/打伞为硬摆姿态、货车用Sprinter近似等限制会在执行结果中说明。</div>
+        <div class="quick-note">💡 场景按钮基于当前地图自动选址，推荐 Town04（高速匝道/隧道/环岛均可）；红绿灯相关按钮固定使用 Town03。在对话框输入按钮文字（如“IDM 跟驰”“红绿灯相位演示”）同样会直接执行，无需大模型。蹲下/躺下/打伞为硬摆姿态、货车用Sprinter近似等限制会在执行结果中说明。</div>
     </div>
 
 </div> 

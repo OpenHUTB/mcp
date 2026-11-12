@@ -116,9 +116,35 @@ CONFORMANCE_XOSC = """<?xml version="1.0" encoding="UTF-8"?>
               </ConditionGroup>
             </StartTrigger>
           </Event>
+          <Event name="ramp_up" priority="overwrite">
+            <Action><PrivateAction><LongitudinalAction><SpeedAction>
+              <SpeedActionDynamics dynamicsShape="cubic" value="2" dynamicsDimension="time"/>
+              <SpeedActionTarget><AbsoluteTargetSpeed value="12"/></SpeedActionTarget>
+            </SpeedAction></LongitudinalAction></PrivateAction></Action>
+            <StartTrigger>
+              <ConditionGroup>
+                <Condition name="c_up" conditionEdge="rising">
+                  <ByValueCondition><SimulationTimeCondition value="8" rule="greaterThan"/></ByValueCondition>
+                </Condition>
+              </ConditionGroup>
+            </StartTrigger>
+          </Event>
+          <Event name="follow_limited" priority="overwrite">
+            <Action><PrivateAction><LongitudinalAction>
+              <LongitudinalDistanceAction entityRef="lead" distance="12"
+                                          maxAcceleration="1.5" maxDeceleration="4"/>
+            </LongitudinalAction></PrivateAction></Action>
+            <StartTrigger>
+              <ConditionGroup>
+                <Condition name="c_follow" conditionEdge="rising">
+                  <ByValueCondition><SimulationTimeCondition value="10" rule="greaterThan"/></ByValueCondition>
+                </Condition>
+              </ConditionGroup>
+            </StartTrigger>
+          </Event>
           <Event name="slow_down" priority="overwrite">
             <Action><PrivateAction><LongitudinalAction><SpeedAction>
-              <SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time"/>
+              <SpeedActionDynamics dynamicsShape="linear" value="1" dynamicsDimension="rate"/>
               <SpeedActionTarget>
                 <AbsoluteTargetSpeed value="$brake_target"/>
               </SpeedActionTarget>
@@ -136,11 +162,72 @@ CONFORMANCE_XOSC = """<?xml version="1.0" encoding="UTF-8"?>
     </Sequence></Act></Story>
     <StopTrigger>
       <ConditionGroup>
-        <Condition name="stop" conditionEdge="rising">
+        <Condition name="stop_time" conditionEdge="rising">
           <ByValueCondition><SimulationTimeCondition value="20" rule="greaterThan"/></ByValueCondition>
         </Condition>
       </ConditionGroup>
+      <ConditionGroup>
+        <Condition name="stop_still" conditionEdge="rising">
+          <ByEntityCondition>
+            <TriggeringEntities triggeringEntitiesRule="any">
+              <EntityRef entityRef="ego"/>
+            </TriggeringEntities>
+            <EntityCondition><StandStillCondition duration="1"/></EntityCondition>
+          </ByEntityCondition>
+        </Condition>
+      </ConditionGroup>
     </StopTrigger>
+  </Storyboard>
+</OpenSCENARIO>
+"""
+
+
+# StopTrigger 提前结束的实跑用例：1s 后刹停，静止满 1s 即结束（计划 8s）
+STOP_TRIGGER_XOSC = """<?xml version="1.0" encoding="UTF-8"?>
+<OpenSCENARIO>
+  <FileHeader revMajor="1" revMinor="1" date="2026-11-12"
+              description="stop trigger demo" author="regression"/>
+  <Entities>
+    <ScenarioObject name="ego"><Vehicle name="v1" vehicleCategory="car"/></ScenarioObject>
+  </Entities>
+  <Storyboard>
+    <Init><Actions><Private entityRef="ego">
+      <PrivateAction><TeleportAction><Position>
+        <LanePosition roadId="1" laneId="-1" s="10" offset="0"/>
+      </Position></TeleportAction></PrivateAction>
+      <PrivateAction><LongitudinalAction><SpeedAction>
+        <SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time"/>
+        <SpeedActionTarget><AbsoluteTargetSpeed value="8"/></SpeedActionTarget>
+      </SpeedAction></LongitudinalAction></PrivateAction>
+    </Private></Actions></Init>
+    <Story name="s"><Act name="a"><ManeuverGroup name="mg" maximumExecutionCount="1">
+      <Actors selectTriggeringEntities="false">
+        <EntityRef entityRef="ego"/>
+      </Actors>
+      <Maneuver name="m">
+        <Event name="brake" priority="overwrite">
+          <Action><PrivateAction><LongitudinalAction><SpeedAction>
+            <SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time"/>
+            <SpeedActionTarget><AbsoluteTargetSpeed value="0"/></SpeedActionTarget>
+          </SpeedAction></LongitudinalAction></PrivateAction></Action>
+          <StartTrigger><ConditionGroup>
+            <Condition name="c_brake" conditionEdge="rising">
+              <ByValueCondition><SimulationTimeCondition value="1" rule="greaterThan"/></ByValueCondition>
+            </Condition>
+          </ConditionGroup></StartTrigger>
+        </Event>
+      </Maneuver>
+    </ManeuverGroup></Act></Story>
+    <StopTrigger><ConditionGroup>
+      <Condition name="c_still" conditionEdge="rising">
+        <ByEntityCondition>
+          <TriggeringEntities triggeringEntitiesRule="any">
+            <EntityRef entityRef="ego"/>
+          </TriggeringEntities>
+          <EntityCondition><StandStillCondition duration="1"/></EntityCondition>
+        </ByEntityCondition>
+      </Condition>
+    </ConditionGroup></StopTrigger>
   </Storyboard>
 </OpenSCENARIO>
 """
@@ -252,7 +339,9 @@ def offline_checks(out_dir: str) -> int:
         problems = []
         evs = {e.name: e for e in sc.events}
         expect_names = {"follow_lead[ego]", "follow_lead[lead]",
-                        "slow_down[ego]", "slow_down[lead]"}
+                        "slow_down[ego]", "slow_down[lead]",
+                        "ramp_up[ego]", "ramp_up[lead]",
+                        "follow_limited[ego]", "follow_limited[lead]"}
         if set(evs) != expect_names:
             problems.append("多 Actor 未展开: %s" % sorted(evs))
 
@@ -278,6 +367,25 @@ def offline_checks(out_dir: str) -> int:
         sd = evs.get("slow_down[ego]")
         if sd is None or not sd.actions or abs(sd.actions[0].value - 3.0) > 1e-6:
             problems.append("参数声明 $brake_target 未替换")
+        if sd is None or not sd.actions or sd.actions[0].dynamics_dimension != "rate":
+            problems.append("SpeedActionDynamics rate 未解析")
+
+        ru = evs.get("ramp_up[ego]")
+        if ru is None or not ru.actions or ru.actions[0].shape != "cubic":
+            problems.append("cubic 速度曲线未解析")
+
+        fo = evs.get("follow_limited[ego]")
+        if (fo is None or not fo.actions
+                or abs(fo.actions[0].max_accel - 1.5) > 1e-6
+                or abs(fo.actions[0].max_decel - 4.0) > 1e-6):
+            problems.append("跟驰加减速上限未解析")
+
+        if sc.stop_trigger is None or sc.stop_trigger.kind != "any":
+            problems.append("StopTrigger 条件组未解析")
+        else:
+            kinds_stop = {c.kind for c in sc.stop_trigger.leaves()}
+            if kinds_stop != {"time", "standstill"}:
+                problems.append("StopTrigger 条件异常: %s" % sorted(kinds_stop))
         if abs(sc.stop_time - 20.0) > 1e-6:
             problems.append("StopTrigger 时间异常: %.1f" % sc.stop_time)
         if sc.unsupported:
@@ -287,8 +395,8 @@ def offline_checks(out_dir: str) -> int:
             print("❌ %-18s %s" % ("conformance", "；".join(problems)))
             failures += 1
         else:
-            print("✅ %-18s 条件组 AND/OR、delay、参数、多 Actor、相对速度全部生效"
-                  % "conformance")
+            print("✅ %-18s 条件组 AND/OR、delay、参数、多 Actor、相对速度、"
+                  "StopTrigger、速度曲线与跟驰上限全部生效" % "conformance")
     except Exception as e:
         print("❌ %-18s 异常 %s: %s" % ("conformance", type(e).__name__, e))
         traceback.print_exc()
@@ -339,6 +447,28 @@ def carla_checks(names, duration: float, host: str, port: int) -> int:
             print("❌ %-18s 异常 %s: %s" % (name, type(e).__name__, e))
             failures += 1
         CR.clear_actors(world)
+
+    # StopTrigger 提前结束
+    try:
+        p = os.path.join(out, "stop_trigger.xosc")
+        with open(p, "w", encoding="utf-8") as f:
+            f.write(STOP_TRIGGER_XOSC)
+        sc = parse_xosc(p)
+        res = play(world, sc, duration=8.0, capture_at=[],
+                   out_dir="", verbose=False)
+        ended = res.get("ended_at", -1)
+        ok = res.get("stop_reason") == "stop_trigger" and 0 < ended < 6.0
+        print("%s %-18s 实际 %.2fs（计划 8.0s）  stop_reason=%s"
+              % ("✅" if ok else "❌", "stop_trigger", ended,
+                 res.get("stop_reason")))
+        if not ok:
+            failures += 1
+            for e in res.get("errors", [])[:3]:
+                print("     - %s" % e)
+    except Exception as e:
+        print("❌ %-18s 异常 %s: %s" % ("stop_trigger", type(e).__name__, e))
+        failures += 1
+    CR.clear_actors(world)
 
     return failures
 

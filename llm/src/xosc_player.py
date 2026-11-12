@@ -36,6 +36,11 @@ xosc_player.py - OpenSCENARIO 场景播放器
 执行结构  Story / Act / Sequence / ManeuverGroup 全层级遍历；
           一个 ManeuverGroup 的多个 Actor 各展开一份事件
 参数      <ParameterDeclarations> 的 $name / ${name} 静态替换
+速度曲线  SpeedActionDynamics 的 step / linear / cubic / sinusoidal，
+          dynamicsDimension 的 time（时长）与 rate（变化率）
+跟驰      LongitudinalDistanceAction 的 distance +
+          maxAcceleration / maxDeceleration（作为 IDM 的 a_max / b）
+停止      StopTrigger 与 StartTrigger 同一套条件语义，满足即提前结束
 触发边沿  rising / falling / none / risingOrFalling
 
 不支持（记入 unsupported，不静默跳过）
@@ -155,8 +160,14 @@ class XoscAction:
     value: float = 0.0
     shape: str = "step"
     dynamics_value: float = 0.0
+    # OSC 的 SpeedActionDynamics/@dynamicsDimension：time 表示渐变时长，
+    # rate 表示变化率（此时渐变时长 = |Δv| / rate）
+    dynamics_dimension: str = "time"
     target_entity: str = ""
     lane_delta: int = 0
+    # LongitudinalDistanceAction 的加减速上限（0 表示用 IDM 默认值）
+    max_accel: float = 0.0
+    max_decel: float = 0.0
     # relative_speed 用：delta = 参照速度 + value；factor = 参照速度 * value
     relative_mode: str = "delta"
     # traffic_light 用：目标相位（green / yellow / red / off）
@@ -184,6 +195,8 @@ class XoscScenario:
     entities: List[XoscEntity] = field(default_factory=list)
     events: List[XoscEvent] = field(default_factory=list)
     stop_time: float = 30.0
+    # Storyboard/StopTrigger：满足即提前结束（None 表示只按 stop_time 跑满）
+    stop_trigger: Optional[XoscTrigger] = None
     unsupported: List[str] = field(default_factory=list)
 
     def entity(self, name: str) -> Optional[XoscEntity]:
@@ -200,6 +213,8 @@ class XoscScenario:
                 a._started_at = None
                 a._start_value = 0.0
                 a._done = False
+        if self.stop_trigger is not None:
+            self.stop_trigger.reset_runtime()
 
 
 # =====================================================================
@@ -378,6 +393,41 @@ def _parse_condition(cond_el, fallback_entity: str) -> Optional[XoscTrigger]:
     return None
 
 
+def _parse_condition_groups(trigger_el, fallback_entity: str,
+                            unsupported: List[str], label: str
+                            ) -> Optional[XoscTrigger]:
+    """把 StartTrigger / StopTrigger 解析成复合条件。
+
+    多个 ConditionGroup 之间是 OR；组内多个 Condition 之间是 AND。
+    只有一个叶子时直接返回它，便于日志与回归读取 kind。
+    """
+    if trigger_el is None:
+        return None
+    groups: List[XoscTrigger] = []
+    for cg in trigger_el.findall("ConditionGroup"):
+        conds: List[XoscTrigger] = []
+        for cond in cg.findall("Condition"):
+            trig = _parse_condition(cond, fallback_entity)
+            if trig is None:
+                for deep in cond.iter():
+                    if deep.tag in _KNOWN_UNSUPPORTED:
+                        unsupported.append("%s条件 %s 未执行" % (label, deep.tag))
+                        break
+                continue
+            # OSC 的条件作用在 TriggeringEntities 上，未声明时才回落到所属实体
+            ref = cond.find("./ByEntityCondition/TriggeringEntities/EntityRef")
+            if ref is not None:
+                trig.triggering_entity = ref.get("entityRef", "")
+            conds.append(trig)
+        if conds:
+            groups.append(XoscTrigger(kind="all", edge="none", children=conds))
+    if not groups:
+        return None
+    if len(groups) == 1 and len(groups[0].children) == 1:
+        return groups[0].children[0]
+    return XoscTrigger(kind="any", edge="none", children=groups)
+
+
 def _parse_actions(pa_list, unsupported: List[str], event_name: str
                    ) -> List[XoscAction]:
     out: List[XoscAction] = []
@@ -439,15 +489,18 @@ def _parse_actions(pa_list, unsupported: List[str], event_name: str
                 if target is not None:
                     shape = "step"
                     dv = 0.0
+                    dim = "time"
                     dyn = sp.find("SpeedActionDynamics")
                     if dyn is not None:
                         shape = dyn.get("dynamicsShape", "step") or "step"
+                        dim = dyn.get("dynamicsDimension", "time") or "time"
                         try:
                             dv = float(dyn.get("value", 0) or 0)
                         except ValueError:
                             dv = 0.0
                     out.append(XoscAction(kind="speed", value=target,
-                                          shape=shape, dynamics_value=dv))
+                                          shape=shape, dynamics_value=dv,
+                                          dynamics_dimension=dim))
                     continue
             dist = longi.find("LongitudinalDistanceAction")
             if dist is not None:
@@ -455,8 +508,17 @@ def _parse_actions(pa_list, unsupported: List[str], event_name: str
                     gap = float(dist.get("distance", 0) or 0)
                 except ValueError:
                     gap = 0.0
+
+                def _limit(attr: str) -> float:
+                    try:
+                        return max(0.0, float(dist.get(attr, 0) or 0))
+                    except ValueError:
+                        return 0.0
+
                 out.append(XoscAction(kind="follow", value=gap,
-                                      target_entity=dist.get("entityRef", "")))
+                                      target_entity=dist.get("entityRef", ""),
+                                      max_accel=_limit("maxAcceleration"),
+                                      max_decel=_limit("maxDeceleration")))
                 continue
             unsupported.append("事件 %s 的纵向动作未识别" % event_name)
             continue
@@ -639,42 +701,12 @@ def parse_xosc(path: str) -> XoscScenario:
 
         for ev in mg.findall("./Maneuver/Event"):
             name = ev.get("name", "")
-            groups: List[XoscTrigger] = []
-            # StartTrigger 里多个 ConditionGroup 之间是 OR，组内 Condition 之间是 AND
-            for cg in ev.findall("./StartTrigger/ConditionGroup"):
-                conds: List[XoscTrigger] = []
-                for cond in cg.findall("Condition"):
-                    trig = _parse_condition(cond, actors[0])
-                    if trig is None:
-                        for deep in cond.iter():
-                            if deep.tag in _KNOWN_UNSUPPORTED:
-                                sc.unsupported.append(
-                                    "事件 %s 的条件 %s 未执行" % (name, deep.tag))
-                                break
-                        continue
-                    # OSC 的条件作用在 TriggeringEntities 上，未声明时才回落到
-                    # ManeuverGroup 的 Actor。之前一律用 Actor，导致"前车静止
-                    # 后跟驰"这类条件永远判在自己身上（后车永不进入跟驰）。
-                    ref = cond.find(
-                        "./ByEntityCondition/TriggeringEntities/EntityRef")
-                    if ref is not None:
-                        trig.triggering_entity = ref.get("entityRef", "")
-                    conds.append(trig)
-                if conds:
-                    groups.append(XoscTrigger(kind="all", edge="none",
-                                              children=conds))
-            if not groups:
-                if not any(name in u for u in sc.unsupported):
-                    sc.unsupported.append("事件 %s 没有可识别的触发条件" % name)
+            trigger = _parse_condition_groups(ev.find("./StartTrigger"),
+                                              actors[0], sc.unsupported,
+                                              "事件 %s 的" % name)
+            if trigger is None:
+                sc.unsupported.append("事件 %s 没有可识别的触发条件" % name)
                 continue
-
-            if len(groups) == 1 and len(groups[0].children) == 1:
-                # 单条件保持原样，便于日志/回归直接读 trigger.kind
-                trigger = groups[0].children[0]
-            else:
-                # 复合条件：叶子各自做边沿检测，根节点不再重复判边沿
-                trigger = XoscTrigger(kind="any", edge="none",
-                                      children=groups)
 
             actions = _parse_actions(ev.findall("./Action/PrivateAction"),
                                      sc.unsupported, name)
@@ -690,9 +722,14 @@ def parse_xosc(path: str) -> XoscScenario:
                     trigger=copy.deepcopy(trigger),
                     actions=copy.deepcopy(actions)))
 
-    # ---- 结束时间 ----
+    # ---- 停止触发 ----
+    # StopTrigger 与 StartTrigger 用同一套条件语义（组间 OR、组内 AND），
+    # 满足即提前结束，而不是只认 SimulationTimeCondition。
     stop = root.find("./Storyboard/StopTrigger")
     if stop is not None:
+        first = sc.entities[0].name if sc.entities else ""
+        sc.stop_trigger = _parse_condition_groups(stop, first,
+                                                  sc.unsupported, "停止触发")
         el = stop.find(".//SimulationTimeCondition")
         if el is not None:
             try:
@@ -1006,17 +1043,14 @@ def _leaf_ready(trig: XoscTrigger, value: bool, now: float) -> bool:
     return _edge_ok(trig, sustained)
 
 
-def _event_ready(world: carla.World, ev: XoscEvent,
-                 actors: Dict[str, carla.Actor], default_actor,
-                 now: float, state: Dict[str, Any]) -> bool:
-    """事件是否就绪：ConditionGroup 之间 OR，组内 Condition 之间 AND。
-
-    所有叶子条件每帧都求值（不短路），否则未求值的叶子边沿状态会失真。
-    """
-    if ev.trigger.children:
-        groups = ev.trigger.children
+def _trigger_ready(world: carla.World, trigger: XoscTrigger,
+                   actors: Dict[str, carla.Actor], default_actor,
+                   now: float, state: Dict[str, Any]) -> bool:
+    """复合条件是否就绪（StartTrigger 与 StopTrigger 共用同一套语义）。"""
+    if trigger.children:
+        groups = trigger.children
     else:
-        groups = [XoscTrigger(kind="all", children=[ev.trigger])]
+        groups = [XoscTrigger(kind="all", children=[trigger])]
 
     any_true = False
     for group in groups:
@@ -1029,6 +1063,16 @@ def _event_ready(world: carla.World, ev: XoscEvent,
         if group_true:
             any_true = True
     return any_true
+
+
+def _event_ready(world: carla.World, ev: XoscEvent,
+                 actors: Dict[str, carla.Actor], default_actor,
+                 now: float, state: Dict[str, Any]) -> bool:
+    """事件是否就绪：ConditionGroup 之间 OR，组内 Condition 之间 AND。
+
+    所有叶子条件每帧都求值（不短路），否则未求值的叶子边沿状态会失真。
+    """
+    return _trigger_ready(world, ev.trigger, actors, default_actor, now, state)
 
 
 # ---------------------------------------------------------------- 控制
@@ -1090,15 +1134,17 @@ def _drive_towards(actor, target: carla.Location, target_speed: float,
 
 
 def _idm_accel(speed: float, desired_speed: float, gap: float,
-               rel_speed: float, s0: float = 2.0) -> float:
+               rel_speed: float, s0: float = 2.0,
+               a_max: float = 2.0, b: float = 3.0) -> float:
     """IDM（智能驾驶员模型）加速度。
 
     a = a_max * [1 - (v/v0)^4 - (s*/gap)^2]
     s* = s0 + max(0, v*T + v*dv/(2*sqrt(a_max*b)))
     gap 为车头净距（前车尾到自车头），rel_speed 为自车 - 前车速度，
     s0 为期望的最小净距（OSC LongitudinalDistanceAction 的 distance）。
+    a_max / b 对应 OSC 动作里的 maxAcceleration / maxDeceleration。
     """
-    a_max, b, t_head = 2.0, 3.0, 1.2
+    t_head = 1.2
     v0 = max(desired_speed, 0.1)
     s_star = s0 + max(0.0, speed * t_head
                       + speed * rel_speed / (2.0 * math.sqrt(a_max * b)))
@@ -1107,15 +1153,26 @@ def _idm_accel(speed: float, desired_speed: float, gap: float,
 
 
 def _idm_follow(actor, lead, gap_target: float, speed_now: float,
-                max_speed: float, steer_target=None) -> None:
-    """IDM 跟驰：保持 gap_target 的净距，必要时刹停。"""
+                max_speed: float, steer_target=None,
+                max_accel: float = 0.0, max_decel: float = 0.0) -> None:
+    """IDM 跟驰：保持 gap_target 的净距，必要时刹停。
+
+    max_accel / max_decel 来自 OSC 动作；为 0 时用 IDM 默认标定。
+    """
     gap = _distance(_loc_of(actor), _loc_of(lead)) - 5.0
     rel = speed_now - _speed_of(lead)
     # 期望速度取场景给定值；前车速度只通过 IDM 的交互项影响减速度。
     # （若把 v0 绑成"前车速度+1.5"，前车停住后自车会一直以 1.5 m/s 蠕行）
     v0 = max(min(max_speed, 30.0), 0.1)
+    a_max = max_accel if max_accel > 0 else 2.0
+    b = max_decel if max_decel > 0 else 3.0
     a = _idm_accel(speed_now, v0, gap, rel,
-                   s0=max(2.0, min(40.0, gap_target)))
+                   s0=max(2.0, min(40.0, gap_target)), a_max=a_max, b=b)
+    # IDM 输出再按动作给的上限夹一次：超车加速或急刹都不越界
+    if max_accel > 0:
+        a = min(a, max_accel)
+    if max_decel > 0:
+        a = max(a, -max_decel)
     throttle, brake = _accel_to_control(a, speed_now)
     steer = _steer_towards(actor, steer_target) if steer_target is not None else 0.0
     actor.apply_control(carla.VehicleControl(throttle=throttle, steer=steer,
@@ -1222,6 +1279,28 @@ def _lane_center_ahead(actor, lookahead: float = 8.0
         return None
 
 
+# 支持渐变的速度动作曲线（OSC SpeedActionDynamics/dynamicsShape）
+_SHAPED_SPEEDS = ("linear", "cubic", "sinusoidal")
+
+
+def _shape_frac(shape: str, frac: float) -> float:
+    """把线性进度映射成各 dynamicsShape 的插值系数。"""
+    frac = max(0.0, min(1.0, frac))
+    if shape == "cubic":
+        # 三次平滑，起止速度为 0
+        return frac * frac * (3.0 - 2.0 * frac)
+    if shape == "sinusoidal":
+        return 0.5 * (1.0 - math.cos(math.pi * frac))
+    return frac
+
+
+def _dynamics_span(act: XoscAction) -> float:
+    """速度渐变的时长：time 维度直接取值，rate 维度按 |Δv| / rate 换算。"""
+    if act.dynamics_dimension == "rate" and act.dynamics_value > 1e-6:
+        return abs(act.value - act._start_value) / act.dynamics_value
+    return max(act.dynamics_value, 1e-3)
+
+
 # =====================================================================
 # 播放
 # =====================================================================
@@ -1311,6 +1390,10 @@ def play(world: carla.World, scenario: XoscScenario,
         if not actors:
             raise XoscPlayerError("没有任何实体成功布景")
 
+        # 布景后先 tick 一帧，让 actor 的 transform 真正生效。
+        # 否则 t=0 求值条件时会读到未初始化的位置（StopTrigger 会被误判为已满足）。
+        world.tick()
+
         # 2) 相机模板（每次截图时重新创建，见下方 capture 逻辑）
         cam_bp = None
         if out_dir and capture_at:
@@ -1323,6 +1406,12 @@ def play(world: carla.World, scenario: XoscScenario,
         # 3) 逐帧
         steps = int(round(dur / dt))
         cap_idx = 0
+        # StopTrigger 的默认求值主体：优先 ego，其次首个实体
+        stop_trigger = scenario.stop_trigger
+        stop_actor_name = next((e.name for e in scenario.entities
+                                if e.name in actors), "")
+        stop_reason = "duration"
+        ended_at = dur
 
         for step in range(steps + 1):
             t = step * dt
@@ -1358,9 +1447,12 @@ def play(world: carla.World, scenario: XoscScenario,
                             actor.disable_constant_velocity()
                         except Exception:
                             pass
-                    if act.kind == "speed" and act.shape not in ("linear",):
+                    if act.kind == "speed" and act.shape not in _SHAPED_SPEEDS:
                         target_speed[ev.entity] = act.value
                         act._done = True
+                    elif act.kind == "speed":
+                        # 渐变从当前速度出发，逐帧更新 target_speed
+                        target_speed[ev.entity] = act._start_value
                     elif act.kind == "lane_change":
                         lane_change[ev.entity] = {
                             "delta": int(act.value),
@@ -1386,7 +1478,9 @@ def play(world: carla.World, scenario: XoscScenario,
                         }
                     elif act.kind == "follow":
                         follow_ctrl[ev.entity] = {
-                            "ref": act.target_entity, "gap": act.value}
+                            "ref": act.target_entity, "gap": act.value,
+                            "max_accel": act.max_accel,
+                            "max_decel": act.max_decel}
                     elif act.kind == "traffic_light":
                         light = _traffic_light_ahead(actor)
                         if light is None:
@@ -1415,9 +1509,10 @@ def play(world: carla.World, scenario: XoscScenario,
                 for act in ev.actions:
                     if act._done:
                         continue
-                    if act.kind == "speed" and act.shape == "linear":
-                        span = max(act.dynamics_value, 1e-3)
-                        frac = min(1.0, (t - (act._started_at or 0)) / span)
+                    if act.kind == "speed" and act.shape in _SHAPED_SPEEDS:
+                        frac = min(1.0, (t - (act._started_at or 0))
+                                   / _dynamics_span(act))
+                        frac = _shape_frac(act.shape, frac)
                         v = act._start_value + (act.value - act._start_value) * frac
                         target_speed[ev.entity] = v
                         if frac >= 1.0:
@@ -1426,7 +1521,9 @@ def play(world: carla.World, scenario: XoscScenario,
                         other = actors.get(act.target_entity)
                         if other is not None:
                             follow_ctrl[ev.entity] = {
-                                "ref": act.target_entity, "gap": act.value}
+                                "ref": act.target_entity, "gap": act.value,
+                                "max_accel": act.max_accel,
+                                "max_decel": act.max_decel}
                     elif act.kind == "relative_speed":
                         # delta: 目标速度 = 参照速度 + 值；factor: 参照速度 * 值
                         other = actors.get(act.target_entity)
@@ -1499,7 +1596,9 @@ def play(world: carla.World, scenario: XoscScenario,
                     if lead is not None and lead is not actor:
                         _idm_follow(actor, lead, fc["gap"], _speed_of(actor),
                                     max(target_speed.get(name, 12.0), 8.0),
-                                    _lane_center_ahead(actor))
+                                    _lane_center_ahead(actor),
+                                    max_accel=fc.get("max_accel", 0.0),
+                                    max_decel=fc.get("max_decel", 0.0))
                         continue
 
                 v = target_speed.get(name, 0.0)
@@ -1583,6 +1682,21 @@ def play(world: carla.World, scenario: XoscScenario,
                                 cams.pop()
                 cap_idx += 1
 
+            # --- 停止触发（满足即提前结束，截图已在本帧完成）---
+            if stop_trigger is not None:
+                default_actor = actors.get(stop_actor_name)
+                if default_actor is not None:
+                    try:
+                        hit = _trigger_ready(world, stop_trigger, actors,
+                                             default_actor, t, state)
+                    except Exception as e:
+                        errors.append("停止条件求值失败: %s" % e)
+                        hit = False
+                    if hit:
+                        stop_reason = "stop_trigger"
+                        ended_at = t
+                        break
+
             # --- 累计里程（traveled_distance 条件用）---
             for nm, ac in actors.items():
                 if not ac.is_alive:
@@ -1624,6 +1738,8 @@ def play(world: carla.World, scenario: XoscScenario,
         "entities": len(scenario.entities),
         "spawned": len(actors),
         "duration": dur,
+        "ended_at": ended_at,
+        "stop_reason": stop_reason,
         "steps": int(round(dur / dt)),
         "events_total": len(scenario.events),
         "events_fired": sum(1 for e in scenario.events if e.fired),
@@ -1643,6 +1759,9 @@ def summarize(result: Dict[str, Any]) -> str:
         "事件 %d 个，已触发 %d 个"
         % (result["events_total"], result["events_fired"]),
     ]
+    if result.get("stop_reason") == "stop_trigger":
+        lines.append("实际运行 %.2fs（StopTrigger 满足，提前结束）"
+                     % result.get("ended_at", result["duration"]))
     if result["applied"]:
         lines.append("已触发的动作：")
         for a in result["applied"]:

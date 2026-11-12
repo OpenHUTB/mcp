@@ -34,11 +34,11 @@ graph LR
 |---|---|---|---|
 | `file_path` | string | 必填 | 待校验的 `.xosc` 文件 |
 
-## 3. 11 个场景模板
+## 3. 12 个场景模板
 
 | 模板 | 场景含义 | 实体数 | 主要触发 |
 |---|---|---|---|
-| `lead_brake` | 前车急刹 | 3 | 时间、时距、静止 |
+| `lead_brake` | 前车急刹 | 3 | 时间 |
 | `lead_stationary` | 前车静止 | 2 | 时间 |
 | `cut_in` | 危险切入 | 4 | 时间、时距、速度、到达 |
 | `crossing_hazard` | 行人/车辆横穿 | 2 | 时间、距离 |
@@ -49,6 +49,7 @@ graph LR
 | `close_follow` | 近距跟驰（TTC 触发减速） | 2 | TTC |
 | `overtake` | 超车（变道 + 相对速度） | 3 | 时间、距离、到达 |
 | `evasive_swerve` | 紧急避让（轨迹跟随） | 3 | 时间 |
+| `signal_phase` | 红绿灯相位（红灯等待→切绿→起步） | 2 | 信号灯、时间 |
 
 ## 4. 对话示例
 
@@ -58,6 +59,23 @@ graph LR
 生成 20 个前车急刹的场景，每个参数在合理范围内随机
 校验刚才生成的场景文件
 ```
+
+### 4.1 文字直达场景
+
+网页聊天框输入与快捷按钮相同的文字，会先命中**本地意图表**，直接执行对应工具，
+不经过大模型（离线、无 API Key 也能用）：
+
+```text
+IDM 跟驰                    -> run_scenario_in_carla(template="lead_brake", duration=18)
+红绿灯相位演示              -> run_traffic_light_demo(map_name="Town03")
+红绿灯模板                  -> run_scenario_in_carla(template="signal_phase", map_name="Town03")
+播放 lead_brake 模板        -> run_scenario_in_carla(template="lead_brake")
+在 Town04 跑匝道汇入        -> scenario_highway_ramp(ramp_type="on", map_name="Town04")
+```
+
+还可以顺带指定截图时刻、时长与红灯时长：`IDM 跟驰，截图 6,12,15`、
+`红绿灯相位演示，红灯 8 秒`。模板名与按钮文字的完整对照见
+[New Features 第 7 节](new-features.md#7-文字直达场景无需大模型)。
 
 ## 5. 代码示例
 

@@ -11,7 +11,7 @@ title: 实测数据与限制
 | 项目 | 结果 |
 |---|---|
 | OSC 生成器往返解析 | 4 场景 × 4 版本 = **16/16 通过** |
-| 场景模板编译与校验 | **8/8 通过**，同 seed 指纹一致 |
+| 场景模板编译与校验 | **12/12 通过**，同 seed 指纹一致 |
 | 批量生成 50 个 | **6.86 s**（要求 < 60 s） |
 | 批量生成 80 个混合 | **10.89 s** |
 | 重复场景 | **0** |
@@ -22,7 +22,7 @@ title: 实测数据与限制
 |---|---|
 | 布局生成 | **7/7** 通过几何校验 |
 | CARLA 路网加载 | **7/7** 成功，每种约 7 秒（含 2 秒世界加载） |
-| 场景播放 | **11/11** 模板跑通，未支持项 0 |
+| 场景播放 | **12/12** 模板跑通，未支持项 0 |
 
 ### 1.3 轨迹
 
@@ -54,18 +54,33 @@ title: 实测数据与限制
 
 | 类别 | 不支持项 |
 |---|---|
-| 条件 | `CollisionCondition`、`TimeToCollisionCondition`、`RelativeSpeedCondition`、`AccelerationCondition`、`OffroadCondition`、`EndOfRoadCondition` |
-| 动作 | `FollowTrajectoryAction` |
-| 结构 | `Story` 分支、`Catalog`、`TrafficSignalControllerAction` |
+| 条件 | `ParameterCondition`、`TimeOfDayCondition`、`UserDefinedValueCondition` |
+| 结构 | `Story` 分支、`Catalog`、`EntitySelection`、运行期 `ParameterAssignment` |
+| 动作 | 绝对目标车道（`AbsoluteLaneChange`） |
+
+已支持的条件组语义：`ConditionGroup` 之间 OR、组内 AND，支持 `Condition` 的 `delay`；
+`Story/Act/Sequence` 全层级与一个 `ManeuverGroup` 多个 Actor 均已覆盖。
+
+已支持的条件（共 16 种）：`SimulationTimeCondition`、`TimeHeadwayCondition`、
+`DistanceCondition`、`SpeedCondition`、`StandStillCondition`、
+`ReachPositionCondition`、`CollisionCondition`、`TimeToCollisionCondition`、
+`RelativeSpeedCondition`、`AccelerationCondition`、`OffroadCondition`、
+`EndOfRoadCondition`、`TraveledDistanceCondition`、`RelativeDistanceCondition`、
+`RelativeAngleCondition`（需 OSC 1.3，导出时自动抬版本）、`TrafficSignalCondition`。
+
+已支持的动作：`SpeedAction`、`LongitudinalDistanceAction`（IDM 跟驰）、
+`LaneChangeAction`（含横向加速度限幅）、`LaneOffsetAction`、
+`FollowTrajectoryAction`、`TrafficSignalControllerAction`。
 
 即便支持的部分也有简化：
 
 | 项目 | 简化 |
 |---|---|
-| 跟驰 | 用 P 控制，未实现 OSC 完整的时距控制与加速度限制 |
-| 变道 | 用纯追踪，未做横向加速度约束 |
+| 跟驰 | 用 IDM（智能驾驶员模型），参数取舒适型标定，未实现 OSC 完整的时距语义 |
+| 变道 | 用纯追踪 + 横向加速度 3 m/s² 限幅，未做完整车辆动力学 |
 | 速度动力学 | `linear` 近似为分帧线性插值 |
 | 位置语义 | `freespace` / `alongroute` 未实现，一律按直线距离 |
+| 信号灯 | 按"自车前方最近红绿灯"的真实状态判定，忽略控制器内部的相位时长模型 |
 
 ### 2.2 路口环是折线拼接
 

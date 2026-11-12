@@ -29,6 +29,7 @@ title: CARLA 执行
 | `duration` | float | 0 | 播放时长；0 表示用场景自身 `StopTrigger` |
 | `capture_times` | string | `2,5` | 截图时刻，逗号分隔 |
 | `out_dir` | string | `llm/output/xosc_run/shots/<template>` | 截图目录 |
+| `map_name` | string | 空 | 用内置地图承载（如 `Town03`），填了就忽略 `xodr_layout`；红绿灯场景必须用内置地图 |
 
 ### 1.3 `list_carla_maps`
 
@@ -37,6 +38,20 @@ title: CARLA 执行
 | `host` / `port` | string / int | `127.0.0.1` / 2000 | CARLA 地址 |
 
 返回服务端版本、当前地图、可用地图列表。
+
+### 1.4 `run_traffic_light_demo`
+
+在含红绿灯的内置地图上演示信号灯条件与信号灯动作：挑一盏灯，沿来车方向后退
+约 35m 布设自车，先冻结为红灯，到 `red_hold` 后切绿，自车按
+`TrafficSignalCondition(green)` 起步。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|---|---|---|---|
+| `map_name` | string | `Town03` | 内置地图（需含红绿灯） |
+| `red_hold` | float | 4.0 | 红灯保持时长（秒） |
+| `duration` | float | 16.0 | 总时长 |
+| `capture_times` | string | `1,3,6,10` | 截图时刻 |
+| `out_dir` | string | `llm/output/xosc_run/shots/traffic_light` | 截图目录 |
 
 ## 2. 对话示例
 
@@ -93,11 +108,11 @@ graph LR
 | 实体 | `Vehicle` / `Pedestrian` | |
 | 初始化 | `TeleportAction` | `LanePosition` / `WorldPosition` |
 | 速度动作 | `SpeedAction` | step 与 linear 动力学 |
-| 跟驰 | `LongitudinalDistanceAction` | P 控制维持间距 |
-| 变道 | `LaneChangeAction` | 纯追踪转向控制 |
+| 跟驰 | `LongitudinalDistanceAction` | IDM 跟驰，按净距与相对速度求加速度 |
+| 变道 | `LaneChangeAction` | 纯追踪转向 + 横向加速度 3 m/s² 限幅 |
 | 横向偏移 | `LaneOffsetAction` | |
 | 横向间距 | `LateralDistanceAction` | 保持与参照实体的横向间距 |
-| 相对速度 | `RelativeSpeedAction` | 目标速度 = 参照速度 + delta |
+| 相对速度 | `RelativeSpeedAction` | `delta`（参照速度 + 值）或 `factor`（参照速度 × 值） |
 | 轨迹跟随 | `FollowTrajectoryAction` | 折线轨迹 + 时间戳，纯追踪 + 前瞻 |
 | 时间触发 | `SimulationTimeCondition` | |
 | 时距触发 | `TimeHeadwayCondition` | 间距 / 自身车速 |
@@ -108,8 +123,25 @@ graph LR
 | 相对速度触发 | `RelativeSpeedCondition` | 自身速度 − 参照实体速度 |
 | TTC 触发 | `TimeToCollisionCondition` | 间距 / 接近速度 |
 | 碰撞触发 | `CollisionCondition` | 包围球近似，中心距 ≤ 2.6 m |
+| 加速度触发 | `AccelerationCondition` | 自身加速度模长 |
+| 驶出路网触发 | `OffroadCondition` | 连续驶出 `duration` 秒 |
+| 路段末端触发 | `EndOfRoadCondition` | 沿车道向前探测剩余距离 |
+| 累计里程触发 | `TraveledDistanceCondition` | 按帧累计行驶里程 |
+| 相对距离触发 | `RelativeDistanceCondition` | 与参照实体的直线距离 |
+| 相对角度触发 | `RelativeAngleCondition` | 航向夹角（需 OSC 1.3） |
+| 信号灯触发 | `TrafficSignalCondition` | 前方最近红绿灯的实际相位 |
+| 信号灯动作 | `TrafficSignalControllerAction` | 冻结并切换相位 |
 
 边沿检测支持 `rising` / `falling` / `risingOrFalling` / `none` 四种 `ConditionEdge`。
+
+触发结构按 esmini 语义求值：
+
+- 多个 `ConditionGroup` 之间 **OR**，组内多个 `Condition` 之间 **AND**
+- 每个 `Condition` 可带 `delay`，需连续成立 N 秒才触发
+- `TriggeringEntities` 决定条件求值主体（未声明时回落到 `ManeuverGroup` 的 Actor）
+- `Story / Act / Sequence` 全层级遍历；一个 `ManeuverGroup` 的多个 `Actor`
+  各展开一份事件
+- `<ParameterDeclarations>` 的 `$name` / `${name}` 在解析前静态替换
 
 ### 5.2 不支持
 
@@ -117,8 +149,8 @@ graph LR
 
 | 类别 | 项目 |
 |---|---|
-| 条件 | `AccelerationCondition`、`OffroadCondition`、`EndOfRoadCondition` |
-| 结构 | `Story` 分支、`Catalog`、`TrafficSignalControllerAction` |
+| 条件 | `ParameterCondition`、`TimeOfDayCondition`、`UserDefinedValueCondition` |
+| 结构 | `Story` 分支、`Catalog`、`EntitySelection`、运行期 `ParameterAssignment` |
 
 ## 6. 返回结果
 
@@ -142,21 +174,36 @@ graph LR
    - output/shots/t04.00.png
 ```
 
-## 7. 8 个模板的实测结果
+## 7. 12 个模板的实测结果
+
+以下是 `python llm/tools/run_regression.py --carla --duration 5` 的实测输出
+（自建 `straight` 路网，每个模板跑 5 秒）：
 
 | 模板 | 实体 | 触发事件 | 未支持项 |
 |---|---|---|---|
 | `lead_stationary` | 2 | 1/1 | 0 |
+| `close_follow` | 2 | 1/1 | 0 |
 | `wrong_way` | 2 | 2/2 | 0 |
 | `crossing_hazard` | 2 | 2/2 | 0 |
 | `junction_light` | 3 | 3/3 | 0 |
 | `lead_brake` | 3 | 3/4 | 0 |
 | `low_overlap` | 3 | 4/4 | 0 |
-| `unprotected_turn` | 3 | 4/4 | 0 |
+| `unprotected_turn` | 3 | 3/4 | 0 |
+| `evasive_swerve` | 3 | 2/2 | 0 |
+| `overtake` | 3 | 2/3 | 0 |
 | `cut_in` | 4 | 4/5 | 0 |
+| `signal_phase` | 2 | 2/4 | 0（需内置地图） |
 
-`lead_brake` 与 `cut_in` 各有一个事件未触发，是**条件本身未满足**
-（前车没在时限内完全静止 / 时距没降到阈值），不是播放器缺陷。
+`lead_brake` / `cut_in` / `unprotected_turn` / `overtake` 各有一个事件未触发，
+是**条件本身未满足**（前车没在时限内完全静止 / 时距没降到阈值 / 5 秒内没走完
+变道），不是播放器缺陷；`--duration` 拉长即可触发。
+
+`signal_phase` 依赖地图自带的红绿灯，自建路网里没有，离线编译正常、实跑请用
+`run_traffic_light_demo`（内置地图）：
+
+```text
+2026-11 红绿灯相位演示：Town03，红灯 4 秒后切绿，自车起步
+```
 
 效果见[效果展示](gallery.md)。
 

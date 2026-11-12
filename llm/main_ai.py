@@ -26,7 +26,24 @@ from pathlib import Path
 from fastapi.responses import FileResponse
 # 添加src目录到Python路径
 current_dir = Path(__file__).parent
+# 这台机器的 D:\Python310 带 python310._pth（隔离模式），不会把脚本目录加进 sys.path，
+# 所以这里显式把 llm 目录和 llm/src 都放进去，直接 python main_ai.py 才能 import src.*
+sys.path.insert(0, str(current_dir))
 sys.path.insert(0, str(current_dir/ "src"))
+
+# ---- 车辆蓝图偏好：场景/演示里优先用「汽车」，避免抽到公交、货车、两轮车 ----
+_NON_CAR_MARKERS = (
+    "bus", "truck", "sprinter", "carlacola", "t2", "crossbike", "century",
+    "omafiets", "harley", "kawasaki", "ninja", "yamaha", "low_rider", "bh.",
+    "diamondback", "gazelle", "fusorosa", "cybertruck",
+)
+
+
+def _prefer_car_blueprints(blueprint_library, bp_filter="vehicle.*"):
+    """从蓝图库里挑出「汽车」；若过滤后为空则退回全部 vehicle.*。"""
+    all_bps = [b for b in blueprint_library.filter(bp_filter) if b.id.startswith("vehicle.")]
+    cars = [b for b in all_bps if not any(m in b.id.lower() for m in _NON_CAR_MARKERS)]
+    return cars or all_bps
 
 from fastmcp import FastMCP
 from src.github_client import GitHubClient
@@ -1082,8 +1099,7 @@ class CarlaClient:
     async def batch_spawn_vehicles_with_id(self, count=10, blueprint_filter="vehicle.*", autopilot=True):
         """批量生成车辆，返回带ID的详细列表"""
         result = {"total": count, "success": 0, "failed": 0, "vehicles": []}
-        blueprints = [bp for bp in self.world.get_blueprint_library().filter(blueprint_filter)
-                      if bp.id.startswith("vehicle.")]
+        blueprints = _prefer_car_blueprints(self.world.get_blueprint_library(), blueprint_filter)
         valid_points = self.get_valid_vehicle_spawn_points(safe_mode=True)
         
         for i in range(min(count, len(valid_points))):
@@ -1133,7 +1149,7 @@ class CarlaClient:
         spawned = []
         
         if params.actor_type == "vehicle":
-            blueprints = [bp for bp in blueprint_library.filter(params.blueprint_filter) if bp.id.startswith("vehicle.")]
+            blueprints = _prefer_car_blueprints(blueprint_library, params.blueprint_filter)
         else:
             blueprints = blueprint_library.filter("walker.pedestrian.*")
         
@@ -1280,7 +1296,7 @@ class CarlaClient:
     def _spawn_vehicle_on_waypoint(self, waypoint, autopilot=True, tag=""):
         """在指定 waypoint 生成一辆车（位置被占用则向后找空位），返回 actor 或 None"""
         blueprint_library = self.world.get_blueprint_library()
-        blueprints = [bp for bp in blueprint_library.filter("vehicle.*") if bp.id.startswith("vehicle.")]
+        blueprints = _prefer_car_blueprints(blueprint_library)
         if not blueprints:
             return None
         candidates = [waypoint]
@@ -2442,8 +2458,7 @@ class CarlaClient:
             t.rotation.yaw = (t.rotation.yaw + 180) % 360
             try:
                 oncoming = self.world.try_spawn_actor(
-                    random.choice([b for b in self.world.get_blueprint_library().filter("vehicle.*")
-                                   if b.id.startswith("vehicle.")]), t)
+                    random.choice(_prefer_car_blueprints(self.world.get_blueprint_library())), t)
             except Exception:
                 oncoming = None
             if oncoming:
@@ -2790,8 +2805,7 @@ class CarlaClient:
                     desc.append(f"横穿行人 ID={walker.id}")
         else:
             bp_filter = "vehicle.bh.crossbike" if crosser == 'bicycle' else "vehicle.*"
-            bps = [b for b in self.world.get_blueprint_library().filter(bp_filter)
-                   if b.id.startswith("vehicle.")]
+            bps = _prefer_car_blueprints(self.world.get_blueprint_library(), bp_filter)
             cross_v = None
             prev2 = cross_arm.previous(15.0)
             if prev2 and bps:
@@ -2872,8 +2886,7 @@ class CarlaClient:
             x=t.location.x + left_vec.x * shift,
             y=t.location.y + left_vec.y * shift,
             z=t.location.z + 0.5)
-        bps = [b for b in self.world.get_blueprint_library().filter("vehicle.*")
-               if b.id.startswith("vehicle.")]
+        bps = _prefer_car_blueprints(self.world.get_blueprint_library())
         target = None
         try:
             target = self.world.try_spawn_actor(random.choice(bps),
@@ -2942,8 +2955,7 @@ class CarlaClient:
                 .transform.location.distance(anchor_loc))
         else:
             random.shuffle(two_way)
-        bps = [b for b in self.world.get_blueprint_library().filter("vehicle.*")
-               if b.id.startswith("vehicle.")]
+        bps = _prefer_car_blueprints(self.world.get_blueprint_library())
         ref = None
         wrong = None
         wrong_wp = None
@@ -5228,7 +5240,10 @@ async def synthesize_trajectory_dataset_impl(
 
     p = Path(seed_path)
     if not p.is_absolute():
-        p = Path(__file__).parent / seed_path
+        base = Path(__file__).parent
+        # 容易只给文件名：依次在当前目录、output/seeds、output 下找
+        candidates = [base / seed_path, base / "output" / "seeds" / seed_path, base / "output" / seed_path]
+        p = next((c for c in candidates if c.exists()), candidates[0])
     if not p.exists():
         return "❌ 种子文件不存在：%s" % p
 
@@ -5295,9 +5310,23 @@ async def compare_trajectory_distribution_impl(
         _sys.path.insert(0, src)
 
     if not real_path:
-        return "❌ 请提供 real_path"
+        # 用户常常只说“和原始轨迹做分布对比”：自动用 output/seeds 里的实采轨迹
+        _seeds = Path(__file__).parent / "output" / "seeds"
+        _pick = None
+        if _seeds.exists():
+            _csv = sorted(_seeds.glob("*.csv"))
+            _pick = _csv[0] if _csv else None
+        if _pick is None:
+            return "❌ 请提供 real_path（实采轨迹），output/seeds 下没有找到 CSV"
+        real_path = str(_pick)
     if not synthetic_dir:
-        return "❌ 请提供 synthetic_dir（合成批次目录）"
+        # 自动选最近一次批量合成的批次目录
+        _root = Path(__file__).parent / "output" / "synthetic"
+        _batches = [d for d in _root.iterdir() if d.is_dir() and any(d.glob("*.csv"))] if _root.exists() else []
+        if not _batches:
+            return "❌ 请提供 synthetic_dir（合成批次目录），output/synthetic 下还没有批次"
+        _batches.sort(key=lambda d: d.stat().st_mtime, reverse=True)
+        synthetic_dir = str(_batches[0])
 
     rp = Path(real_path)
     if not rp.is_absolute():
@@ -5621,7 +5650,8 @@ async def run_scenario_in_carla_impl(template: str = "lead_brake",
                                      capture_times: str = "2,5",
                                      out_dir: str = "",
                                      host: str = "127.0.0.1",
-                                     port: int = 2000) -> str:
+                                     port: int = 2000,
+                                     map_name: str = "") -> str:
     """把生成的 .xosc 在 CARLA 里播放并截图。"""
     import sys as _sys
 
@@ -5669,20 +5699,28 @@ async def run_scenario_in_carla_impl(template: str = "lead_brake",
     except ImportError as e:
         return "❌ 缺少 road_builder：%s" % e
 
-    if xodr_layout not in DEFAULT_PARAMS:
-        return "❌ 未知路网布局 `%s`" % xodr_layout
-    xodr_dir = base / "xodr"
-    xodr_dir.mkdir(parents=True, exist_ok=True)
-    xodr_file = xodr_dir / ("%s.xodr" % xodr_layout)
-    write(xodr_layout, str(xodr_file))
-    info = inspect_road(str(xodr_file))
-    if not info["valid"]:
-        return "❌ 路网无效：%s" % info["error"]
+    xodr_file = None
+    if map_name:
+        # 用内置地图：地图自带真实路网与红绿灯，LanePosition 按地图解析
+        pass
+    else:
+        if xodr_layout not in DEFAULT_PARAMS:
+            return "❌ 未知路网布局 `%s`" % xodr_layout
+        xodr_dir = base / "xodr"
+        xodr_dir.mkdir(parents=True, exist_ok=True)
+        xodr_file = xodr_dir / ("%s.xodr" % xodr_layout)
+        write(xodr_layout, str(xodr_file))
+        info = inspect_road(str(xodr_file))
+        if not info["valid"]:
+            return "❌ 路网无效：%s" % info["error"]
 
     # 3) 连接并播放
     try:
         client = CR.connect(host, port)
-        world = CR.load_xodr_world(client, str(xodr_file))
+        if map_name:
+            world = CR.load_builtin_world(client, map_name)
+        else:
+            world = CR.load_xodr_world(client, str(xodr_file))
         CR.clear_actors(world)
     except Exception as e:
         return "❌ CARLA 准备失败：%s" % e
@@ -5717,12 +5755,12 @@ async def run_scenario_in_carla(template: str = "lead_brake",
                                 capture_times: str = "2,5",
                                 out_dir: str = "",
                                 host: str = "127.0.0.1",
-                                port: int = 2000) -> str:
+                                port: int = 2000,
+                                map_name: str = "") -> str:
     """在 CARLA 里播放生成的 OpenSCENARIO 场景并截图（需要 CarlaUE4 已启动）。
 
-    这是轻量播放器：解析 .xosc 的实体与时间触发，按 StartTrigger 下发
-    速度动作，跑固定时长并截图。只覆盖本项目模板能表达的子集——
-    时距/距离等 EntityTrigger、变道、跟驰会记入"未执行"而不是静默跳过。
+    这是轻量播放器：解析 .xosc 的实体与触发条件，按 StartTrigger 下发动作，
+    跑固定时长并截图。
 
     Args:
         template: 场景模板名（与 xosc_path 二选一）
@@ -5731,10 +5769,158 @@ async def run_scenario_in_carla(template: str = "lead_brake",
         duration: 播放时长（0 表示用场景自己的 StopTrigger）
         capture_times: 截图时刻，逗号分隔，如 "2,5,8"
         out_dir: 截图目录
+        map_name: 用 CARLA 内置地图承载（如 Town03），填了就忽略 xodr_layout；
+                  红绿灯类场景必须用内置地图
     """
     return await run_scenario_in_carla_impl(template, xosc_path, xodr_layout,
                                             duration, capture_times, out_dir,
-                                            host, port)
+                                            host, port, map_name)
+
+
+async def run_traffic_light_demo_impl(map_name: str = "Town03",
+                                      red_hold: float = 4.0,
+                                      duration: float = 16.0,
+                                      capture_times: str = "1,3,6,10",
+                                      out_dir: str = "",
+                                      host: str = "127.0.0.1",
+                                      port: int = 2000) -> str:
+    """在真实地图上演示信号灯条件与信号灯动作。
+
+    做法：
+      1. 从地图里挑一盏红绿灯，沿来车方向后退约 35m 作为自车起点；
+      2. 脚本在 t=0 把灯冻结为红灯；
+      3. 自车用 TrafficSignalCondition(red) 保持静止；
+      4. t=red_hold 时用 TrafficSignalControllerAction 切绿，
+         自车用 TrafficSignalCondition(green) 触发起步。
+    """
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    try:
+        import carla
+        from xosc_player import (XoscAction, XoscEntity, XoscEvent,
+                                 XoscScenario, XoscTrigger, play, summarize)
+        import carla_runner as CR
+    except ImportError as e:
+        return "❌ 导入失败（需要 carla 包）：%s" % e
+
+    base = Path(__file__).parent / "output" / "xosc_run"
+    shot_dir = Path(out_dir) if out_dir else (base / "shots" / "traffic_light")
+
+    try:
+        client = CR.connect(host, port)
+        world = CR.load_builtin_world(client, map_name)
+        CR.clear_actors(world)
+    except Exception as e:
+        return "❌ CARLA 准备失败：%s" % e
+
+    amap = world.get_map()
+    lights = [a for a in world.get_actors().filter("traffic.traffic_light")]
+    if not lights:
+        return "❌ 地图 %s 内没有红绿灯，请换 Town03/Town10HD 等城市地图" % map_name
+
+    start_tf = None
+    light = None
+    for lt in lights:
+        wp = amap.get_waypoint(lt.get_transform().location)
+        if wp is None:
+            continue
+        cur, walked = wp, 0.0
+        ok = True
+        while walked < 35.0:
+            prev = [w for w in cur.previous(2.0)
+                    if w.lane_type == carla.LaneType.Driving]
+            if not prev:
+                ok = False
+                break
+            cur, walked = prev[0], walked + 2.0
+        if ok:
+            light, start_tf = lt, cur.transform
+            break
+    if light is None or start_tf is None:
+        return "❌ 没有找到可用于演示的红绿灯（找不到足够长的来车车道）"
+
+    # 组装场景：红灯等待 -> 脚本切绿 -> 绿灯起步
+    sc = XoscScenario(name="traffic_light_demo", stop_time=duration)
+    sc.entities = [XoscEntity(
+        name="ego", kind="vehicle", position_kind="world",
+        x=start_tf.location.x, y=start_tf.location.y, z=start_tf.location.z,
+        h=start_tf.rotation.yaw, initial_speed=0.0)]
+    sc.events = [
+        XoscEvent(name="force_red", entity="ego",
+                  trigger=XoscTrigger(kind="time", value=0.0),
+                  actions=[XoscAction(kind="traffic_light", phase="red")]),
+        XoscEvent(name="hold_red", entity="ego",
+                  trigger=XoscTrigger(kind="traffic_signal", signal_phase="red"),
+                  actions=[XoscAction(kind="speed", value=0.0)]),
+        XoscEvent(name="force_green", entity="ego",
+                  trigger=XoscTrigger(kind="time", value=red_hold),
+                  actions=[XoscAction(kind="traffic_light", phase="green")]),
+        XoscEvent(name="go_green", entity="ego",
+                  trigger=XoscTrigger(kind="traffic_signal",
+                                      signal_phase="green"),
+                  actions=[XoscAction(kind="speed", value=8.0,
+                                      shape="linear", dynamics_value=2.0)]),
+    ]
+
+    # 播放前先把灯置红并 tick 一次：TrafficLight.state 要等服务器下一帧
+    # 才更新，否则开场第一帧可能读成绿灯，让"绿灯起步"条件提前触发。
+    try:
+        light.freeze(True)
+        light.set_state(carla.TrafficLightState.Red)
+        world.tick()
+    except Exception as e:
+        app_logger.warning("预设红灯失败（继续）: %s" % e)
+
+    caps = []
+    for part in str(capture_times or "").replace("，", ",").split(","):
+        part = part.strip()
+        if part:
+            try:
+                caps.append(float(part))
+            except ValueError:
+                pass
+
+    try:
+        res = play(world, sc, duration=duration, capture_at=caps,
+                   out_dir=str(shot_dir), width=960, height=540)
+    except Exception as e:
+        app_logger.error("❌ 红绿灯演示失败: %s" % e)
+        return "❌ 红绿灯演示失败：%s: %s" % (type(e).__name__, e)
+    finally:
+        try:
+            light.freeze(False)
+        except Exception:
+            pass
+
+    return ("✅ 红绿灯相位演示完成（地图 %s，红绿灯 id=%s）\n"
+            "   红灯保持 %.1fs 后切绿，自车按 TrafficSignalCondition 起步\n\n"
+            % (map_name, light.id, red_hold)) + summarize(res)
+
+
+@mcp.tool()
+async def run_traffic_light_demo(map_name: str = "Town03",
+                                 red_hold: float = 4.0,
+                                 duration: float = 16.0,
+                                 capture_times: str = "1,3,6,10",
+                                 out_dir: str = "",
+                                 host: str = "127.0.0.1",
+                                 port: int = 2000) -> str:
+    """在真实地图上演示红绿灯相位控制（红灯停车 -> 切绿 -> 起步）。
+
+    Args:
+        map_name: 内置地图名（Town03 / Town10HD 等，需含红绿灯）
+        red_hold: 红灯保持时长（秒），到点后脚本把信号切绿
+        duration: 总时长（秒）
+        capture_times: 截图时刻，逗号分隔
+        out_dir: 截图目录
+    """
+    return await run_traffic_light_demo_impl(map_name, red_hold, duration,
+                                              capture_times, out_dir,
+                                              host, port)
 
 
 def _resolve_actor_by_id(actor_id):
@@ -6797,15 +6983,14 @@ class FastMCPGitHubAssistant:
                 "type": "function",
                 "function": {
                     "name": "compare_trajectory_distribution",
-                    "description": "对比真实轨迹与合成轨迹的分布，用 KS 统计量和 Wasserstein 距离量化速度/加速度/里程/时长/曲率的差异，越界给出告警。用于判断合成数据是否'像'真实数据。",
+                    "description": "对比真实轨迹与合成轨迹的分布，用 KS 统计量和 Wasserstein 距离量化速度/加速度/里程/时长/曲率的差异，越界给出告警。用于判断合成数据是否'像'真实数据。当用户只说「和原始轨迹做分布对比」时，直接调用本工具、两个参数都留空即可：会自动取 output/seeds 下的实采轨迹和 output/synthetic 下最近一次批量合成的结果。",
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "real_path": {"type": "string", "description": "真实轨迹文件路径", "default": ""},
-                            "synthetic_dir": {"type": "string", "description": "合成批次目录（含 CSV 的目录）", "default": ""},
+                            "real_path": {"type": "string", "description": "真实轨迹文件路径，可留空（默认 output/seeds 下第一个 CSV）", "default": ""},
+                            "synthetic_dir": {"type": "string", "description": "合成批次目录，可留空（默认 output/synthetic 下最新一批）", "default": ""},
                             "format": {"type": "string", "description": "真实数据的格式", "enum": ["", "csv", "fcd", "json"], "default": ""}
-                        },
-                        "required": ["real_path", "synthetic_dir"]
+                        }
                     }
                 }
             },
@@ -6875,7 +7060,26 @@ class FastMCPGitHubAssistant:
                             "capture_times": {"type": "string", "description": "截图时刻，逗号分隔", "default": "2,5"},
                             "out_dir": {"type": "string", "description": "截图输出目录", "default": ""},
                             "host": {"type": "string", "description": "CARLA 服务地址", "default": "127.0.0.1"},
-                            "port": {"type": "integer", "description": "CARLA 端口", "default": 2000}
+                            "port": {"type": "integer", "description": "CARLA 端口", "default": 2000},
+                            "map_name": {"type": "string", "description": "用 CARLA 内置地图承载（如 Town03），填了就忽略 xodr_layout；红绿灯场景必须用内置地图", "default": ""}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_traffic_light_demo",
+                    "description": "在真实地图上演示红绿灯相位控制：红灯停车等待，到点切绿后自车起步，并按时刻截图。需要 CarlaUE4.exe 已启动。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "map_name": {"type": "string", "description": "内置地图名（Town03 / Town10HD 等，需含红绿灯）", "default": "Town03"},
+                            "red_hold": {"type": "number", "description": "红灯保持时长（秒）", "default": 4.0},
+                            "duration": {"type": "number", "description": "总时长（秒）", "default": 16.0},
+                            "capture_times": {"type": "string", "description": "截图时刻，逗号分隔", "default": "1,3,6,10"},
+                            "out_dir": {"type": "string", "description": "截图输出目录", "default": ""}
                         },
                         "required": []
                     }
@@ -7506,6 +7710,19 @@ class FastMCPGitHubAssistant:
                     capture_times=arguments.get("capture_times", "2,5"),
                     out_dir=arguments.get("out_dir", ""),
                     host=arguments.get("host", "127.0.0.1"),
+                    port=arguments.get("port", 2000),
+                    map_name=arguments.get("map_name", "")
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "run_traffic_light_demo":
+                result = await run_traffic_light_demo_impl(
+                    map_name=arguments.get("map_name", "Town03"),
+                    red_hold=arguments.get("red_hold", 4.0),
+                    duration=arguments.get("duration", 16.0),
+                    capture_times=arguments.get("capture_times", "1,3,6,10"),
+                    out_dir=arguments.get("out_dir", ""),
+                    host=arguments.get("host", "127.0.0.1"),
                     port=arguments.get("port", 2000)
                 )
                 return {"success": True, "data": result}
@@ -8037,6 +8254,14 @@ class FastMCPGitHubAssistant:
 - 如果用户消息中包含 "连接CARLA"、"CARLA服务器"，调用 `connect_carla` 工具。
 - **绝对不要**将"路网"或"网格"理解为 CARLA 车辆生成请求。
 
+## 🗣️ 回答风格（非常重要，面向用户与演示）
+
+- 用自然、口语化的中文回答，像一位熟悉业务的助手在跟用户对话，而不是打印技术日志。
+- 先给结论：第一句话就说清楚「做了什么、结果怎么样」，再补 2–4 条要点（数量、耗时、输出位置可用简短目录名）。
+- 不要输出大表格、JSON、文件字节数、内部变量名或实现细节；除非用户明确要求看细节。
+- 文件路径只保留目录末两级即可，例如 `output/scenarios/lead_brake_...`，不要贴完整绝对路径。
+- 单条回答控制在 150 字以内，语气友好，可少量使用 emoji，结尾可以顺带给出一个自然的下一步建议。
+
 你是一个GitHub搜索助手，基于FastMCP框架提供服务。你有以下工具可以使用：
 
 CARLA仿真功能：
@@ -8162,6 +8387,7 @@ CARLA相关：
 - 如果用户已经连接过CARLA服务器，不要再重复调用connect_carla
 - 当用户明确要求生成行人或车辆时，直接调用对应的生成工具，不要先调用connect_carla
 - 只有当用户明确要求连接服务器时，才调用connect_carla
+- 用户要求「和原始轨迹做分布对比」「对比合成数据分布」时，直接调用 compare_trajectory_distribution 且参数留空（自动用 output/seeds 的实采轨迹与 output/synthetic 最新批次），不要向用户索要路径
 
 通用策略：
 - 首先判断用户意图是GitHub相关还是CARLA仿真相关
@@ -8254,20 +8480,46 @@ CARLA相关：
                     "content": json.dumps(tool_result, ensure_ascii=False)
                 })
 
-            # 再次调用API获取最终回答
+            # 再次调用API获取最终回答（最多 2 轮：允许模型先合成、再对比）
             app_logger.info("🤖 正在生成最终回答...")
             try:
-                final_response = await self.call_deepseek_with_tools(messages)
-                final_message = final_response["choices"][0]["message"]["content"]
+                all_calls = list(tool_calls)
+                final_message = ""
+                for _round in range(2):
+                    final_response = await self.call_deepseek_with_tools(messages)
+                    fm = final_response["choices"][0]["message"]
+                    messages.append(fm)
+                    nxt = fm.get("tool_calls") or []
+                    if nxt:
+                        app_logger.info(f"🔁 第{_round + 2}轮工具调用: {len(nxt)} 个")
+                        for tc in nxt:
+                            all_calls.append(tc)
+                            tool_result = await self.execute_fastmcp_tool_call(tc)
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc["id"],
+                                "content": json.dumps(tool_result, ensure_ascii=False)
+                            })
+                        continue
+                    final_message = fm.get("content") or ""
+                    break
                 app_logger.info(f"✅ 最终回答生成成功，长度: {len(final_message)}")
 
                 if not final_message or final_message.strip() == "":
-                    app_logger.info("❌ 警告：最终回答为空")
-                    final_message = "抱歉，我无法生成回答。请稍后重试。"
+                    app_logger.info("❌ 警告：最终回答为空，退回直接展示工具结果")
+                    try:
+                        _data = tool_result.get("data") if isinstance(tool_result, dict) else None
+                    except Exception:
+                        _data = None
+                    if isinstance(_data, str) and _data.strip():
+                        final_message = _data
+                    else:
+                        final_message = "✅ 工具已执行完成：\n```\n" + \
+                            json.dumps(tool_result, ensure_ascii=False, indent=1)[:1500] + "\n```"
 
                 return {
                     "message": self.process_markdown(final_message),
-                    "tool_calls": tool_calls,
+                    "tool_calls": all_calls,
                     "conversation": messages
                 }
             except Exception as e:
@@ -8849,6 +9101,16 @@ def get_web_interface():
         <div class="quick-title">⚡ 场景快捷按钮（点击直接执行，无需输入）</div>
 
         <div class="week-group">
+            <div class="week-label"><span style="color:#e11d48;">🆕 2026-11 新增功能（OpenSCENARIO 播放器增强）</span></div>
+            <div class="quick-btns">
+                <button class="qbtn" style="background:linear-gradient(135deg,#e11d48,#be123c);" onclick="runQuickTool('run_traffic_light_demo', {map_name: 'Town03', red_hold: 4, capture_times: '1,3,6,10'}, this)">🚦 2026-11 红绿灯相位演示</button>
+                <button class="qbtn" style="background:linear-gradient(135deg,#e11d48,#be123c);" onclick="runQuickTool('run_scenario_in_carla', {template: 'signal_phase', map_name: 'Town03', capture_times: '1,4,7'}, this)">📗 2026-11 红绿灯模板（signal_phase）</button>
+                <button class="qbtn" style="background:linear-gradient(135deg,#e11d48,#be123c);" onclick="runQuickTool('run_scenario_in_carla', {template: 'lead_brake', duration: 18, capture_times: '6,12,15'}, this)">🚗 2026-11 IDM 跟驰（前车急刹）</button>
+                <button class="qbtn" style="background:linear-gradient(135deg,#e11d48,#be123c);" onclick="runQuickTool('run_scenario_in_carla', {template: 'cut_in', capture_times: '1,3,5'}, this)">↔️ 2026-11 变道（横向加速度约束）</button>
+            </div>
+        </div>
+
+        <div class="week-group">
             <div class="week-label"><span class="w1">🛣️ 道路结构场景</span></div>
             <div class="quick-btns">
                 <button class="qbtn qbtn-w1" onclick="runQuickTool('scenario_highway_ramp', {ramp_type: 'on'}, this)">🛣️ 匝道汇入</button>
@@ -9182,7 +9444,7 @@ def main():
         print("[WEB] 启动 FastMCP AI助手 Web 对话界面...")
         host_ip = socket.gethostbyname(socket.gethostname())
         print(f"[INFO] 访问地址: http://{host_ip}:3000")
-        uvicorn.run(app='main_ai:app', host=host_ip, port=3000, reload=True)
+        uvicorn.run(app='main_ai:app', host=host_ip, port=3000, reload=False)
 
 @mcp.tool()
 async def generate_sumo_network(
@@ -9569,4 +9831,5 @@ async def spawn_vehicle_param(
 
 if __name__ == "__main__":
     main()
+
 

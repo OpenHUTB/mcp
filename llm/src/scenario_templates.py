@@ -158,11 +158,11 @@ def build_lead_brake(p: Dict[str, Any]) -> ScenarioSpec:
             TriggerSpec(kind=TriggerKind.TIME, value=0.0),
             TriggerSpec(kind=TriggerKind.TIME, value=brake_delay,
                         edge=ConditionEdge.RISING),
-            # ego 用跟驰距离触发制动（原实现是硬编码 sleep）
-            TriggerSpec(kind=TriggerKind.TIME_HEADWAY, rule=Rule.LESS_THAN,
-                        value=1.2, entity_ref="lead", triggering_entity="ego"),
-            TriggerSpec(kind=TriggerKind.STANDSTILL, value=1.0,
-                        triggering_entity="lead"),
+            # 自车与后车都从 0s 起进入跟驰：
+            # 之前后车的跟驰挂在"前车静止 1s"上，触发前它按初始速度直冲，
+            # 会直接追尾自车。
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0),
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0),
             TriggerSpec(kind=TriggerKind.SPEED, rule=Rule.LESS_THAN,
                         value=brake_speed + 1.0, triggering_entity="lead"),
         ],
@@ -555,6 +555,50 @@ def build_evasive_swerve(p: Dict[str, Any]) -> ScenarioSpec:
 
 
 # =====================================================================
+# 模板 12：红绿灯相位（信号灯条件 + 信号灯动作）
+#   自车在停止线前等红灯；到 wait_time 时脚本把信号切绿，自车起步通过。
+#   同时用到 TrafficSignalCondition 与 TrafficSignalControllerAction。
+# =====================================================================
+def build_signal_phase(p: Dict[str, Any]) -> ScenarioSpec:
+    ego_speed = float(p.get("ego_speed", 9.0))
+    wait_time = float(p.get("wait_time", 6.0))
+    stop_s = float(p.get("stop_s", 50.0))
+    duration = float(p.get("duration", 25.0))
+    controller = p.get("controller", "signal_1")
+
+    return ScenarioSpec(
+        name="signal_phase",
+        description="红灯等待 %.1fs 后转绿起步通过（信号灯相位控制）" % wait_time,
+        entities=[_veh("ego", stop_s, 0.0, LANE_R),
+                  _veh("follow", stop_s - 18.0, 0.0, LANE_R)],
+        behaviors=[
+            # 红灯期间保持静止
+            _speed("ego", 0.0, DynamicsShape.STEP, 0.0),
+            # 绿灯起步
+            _speed("ego", ego_speed, DynamicsShape.LINEAR, 2.0),
+            # 脚本强制把信号切绿，保证场景可复现
+            BehaviorSpec(kind=BehaviorKind.TRAFFIC_SIGNAL, entity_ref="ego",
+                         signal_controller=controller, signal_phase="green"),
+            _speed("follow", 0.0, DynamicsShape.STEP, 0.0),
+        ],
+        triggers=[
+            TriggerSpec(kind=TriggerKind.TRAFFIC_SIGNAL, rule=Rule.EQUAL_TO,
+                        signal_controller=controller, signal_phase="red",
+                        name="wait_red"),
+            TriggerSpec(kind=TriggerKind.TRAFFIC_SIGNAL, rule=Rule.EQUAL_TO,
+                        signal_controller=controller, signal_phase="green",
+                        name="go_green"),
+            TriggerSpec(kind=TriggerKind.TIME, value=wait_time,
+                        name="force_green"),
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0, name="follow_hold"),
+        ],
+        duration=duration, template="signal_phase",
+        params={"ego_speed": ego_speed, "wait_time": wait_time},
+        tags=["信号灯", "相位", "路口"],
+    )
+
+
+# =====================================================================
 # 注册表
 # =====================================================================
 _BUILDERS: Dict[str, Callable[[Dict[str, Any]], ScenarioSpec]] = {
@@ -569,6 +613,7 @@ _BUILDERS: Dict[str, Callable[[Dict[str, Any]], ScenarioSpec]] = {
     "close_follow": build_close_follow,
     "overtake": build_overtake,
     "evasive_swerve": build_evasive_swerve,
+    "signal_phase": build_signal_phase,
 }
 
 TEMPLATES: Dict[str, TemplateSpec] = {
@@ -676,6 +721,15 @@ TEMPLATES: Dict[str, TemplateSpec] = {
             "lead_speed": ParamRange(kind="uniform", low=5.0, high=10.0, unit="m/s"),
             "gap": ParamRange(kind="uniform", low=30.0, high=55.0, unit="m"),
             "delta": ParamRange(kind="uniform", low=3.0, high=6.0, unit="m/s"),
+        }),
+    "signal_phase": TemplateSpec(
+        name="signal_phase", title="红绿灯相位",
+        description="红灯等待，信号切绿后起步通过（TrafficSignalCondition + 动作）",
+        carla_function="scenario_junction_light", tags=["信号灯", "相位"],
+        params={
+            "ego_speed": ParamRange(kind="uniform", low=6.0, high=12.0, unit="m/s"),
+            "wait_time": ParamRange(kind="uniform", low=3.0, high=10.0, unit="s"),
+            "stop_s": ParamRange(kind="fixed", value=50.0, unit="m"),
         }),
 }
 

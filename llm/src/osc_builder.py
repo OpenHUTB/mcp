@@ -218,6 +218,13 @@ def _make_action(b: BehaviorSpec):
         traj.add_shape(xosc.Polyline(times, positions))
         return xosc.FollowTrajectoryAction(traj, xosc.FollowingMode.follow)
 
+    if b.kind == BehaviorKind.TRAFFIC_SIGNAL:
+        if not b.signal_phase:
+            raise OSCBuildError("traffic_signal 行为需要 signal_phase")
+        # 输出 <GlobalAction><InfrastructureAction>...TrafficSignalControllerAction
+        return xosc.TrafficSignalControllerAction(b.signal_phase,
+                                                  b.signal_controller or "signal_1")
+
     raise OSCBuildError("未知行为类型: %s" % b.kind)
 
 
@@ -297,12 +304,66 @@ def _make_trigger(t: TriggerSpec, fallback_entity: str):
                 t.value, rule, freespace=False, entity=t.entity_ref),
             subject)
 
+    if t.kind == TriggerKind.ACCELERATION:
+        return xosc.EntityTrigger(
+            name, t.delay, edge,
+            xosc.AccelerationCondition(t.value, rule), subject)
+
+    if t.kind == TriggerKind.OFFROAD:
+        # value 表示"连续驶出路网"的持续时长
+        return xosc.EntityTrigger(
+            name, t.delay, edge, xosc.OffroadCondition(t.value), subject)
+
+    if t.kind == TriggerKind.END_OF_ROAD:
+        return xosc.EntityTrigger(
+            name, t.delay, edge, xosc.EndOfRoadCondition(t.value), subject)
+
+    if t.kind == TriggerKind.TRAVELED_DISTANCE:
+        return xosc.EntityTrigger(
+            name, t.delay, edge,
+            xosc.TraveledDistanceCondition(t.value), subject)
+
+    if t.kind == TriggerKind.RELATIVE_DISTANCE:
+        if not t.entity_ref:
+            raise OSCBuildError("relative_distance 需要 entity_ref")
+        return xosc.EntityTrigger(
+            name, t.delay, edge,
+            xosc.RelativeDistanceCondition(
+                t.value, rule, xosc.RelativeDistanceType.longitudinal,
+                t.entity_ref, alongroute=False, freespace=False),
+            subject)
+
+    if t.kind == TriggerKind.RELATIVE_ANGLE:
+        if not t.entity_ref:
+            raise OSCBuildError("relative_angle 需要 entity_ref")
+        return xosc.EntityTrigger(
+            name, t.delay, edge,
+            xosc.RelativeAngleCondition(
+                t.value, max(t.tolerance, 1e-3), xosc.AngleType.heading,
+                t.entity_ref, xosc.CoordinateSystem.world),
+            subject)
+
+    if t.kind == TriggerKind.TRAFFIC_SIGNAL:
+        if not t.signal_phase:
+            raise OSCBuildError("traffic_signal 触发需要 signal_phase")
+        # TrafficSignalCondition 属于 ByValueCondition（无触发主体）
+        return xosc.ValueTrigger(
+            name, t.delay, edge,
+            xosc.TrafficSignalCondition(t.signal_controller or "signal_1",
+                                        t.signal_phase))
+
     raise OSCBuildError("未知触发类型: %s" % t.kind)
 
 
 # =============================================================== 主入口
 def build_scenario(spec: ScenarioSpec) -> xosc.Scenario:
     """ScenarioSpec -> xosc.Scenario（尚未落盘）。"""
+    # RelativeAngleCondition 自 OSC 1.3 才引入，低版本声明会自动抬到 1.3
+    minor = spec.osc_minor_version
+    if minor < 3 and any(t.kind == TriggerKind.RELATIVE_ANGLE
+                         for t in spec.triggers):
+        minor = 3
+
     # 1. 实体
     entities = xosc.Entities()
     for e in spec.entities:
@@ -334,7 +395,7 @@ def build_scenario(spec: ScenarioSpec) -> xosc.Scenario:
     for i, b in enumerate(spec.behaviors):
         action = _make_action(b)
         ev = xosc.Event("%s_ev" % b.resolved_name(),
-                        _priority(spec.priority, spec.osc_minor_version))
+                        _priority(spec.priority, minor))
         ev.add_action("%s_act" % b.resolved_name(), action)
 
         if triggers:
@@ -376,7 +437,7 @@ def build_scenario(spec: ScenarioSpec) -> xosc.Scenario:
     return xosc.Scenario(
         spec.name, spec.author, xosc.ParameterDeclarations(),
         entities, sb, rn, xosc.Catalog(),
-        osc_minor_version=spec.osc_minor_version)
+        osc_minor_version=minor)
 
 
 def write_scenario(spec: ScenarioSpec, path: str) -> str:

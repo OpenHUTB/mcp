@@ -7,31 +7,43 @@ xosc_player.py - OpenSCENARIO 场景播放器
 支持范围
 --------
 实体      Vehicle / Pedestrian
-初始化    TeleportAction -> LanePosition / WorldPosition
+初始化    TeleportAction -> LanePosition(roadId/laneId/s/offset) / WorldPosition
 动作      SpeedAction（step / linear 渐变）
-          LongitudinalDistanceAction（跟驰）
-          LaneChangeAction（转向控制实现）
+          LongitudinalDistanceAction（IDM 跟驰）
+          LaneChangeAction（转向控制 + 横向加速度限幅）
           LaneOffsetAction（车道内横向偏移）
+          FollowTrajectoryAction（轨迹跟随）
+          TrafficSignalControllerAction（切换信号灯相位）
 条件      SimulationTimeCondition（仿真时间）
           TimeHeadwayCondition（车头时距）
           DistanceCondition（到某位置的距离）
           SpeedCondition（自身速度）
           StandStillCondition（静止一段时间）
           ReachPositionCondition（到达某位置）
+          CollisionCondition（碰撞）
+          TimeToCollisionCondition（碰撞时间）
+          RelativeSpeedCondition（相对速度）
+          AccelerationCondition（自身加速度）
+          OffroadCondition（驶出路网）
+          EndOfRoadCondition（到达路段末端）
+          TraveledDistanceCondition（累计里程）
+          RelativeDistanceCondition（与参照实体的距离）
+          RelativeAngleCondition（与参照实体的航向夹角）
+          TrafficSignalCondition（信号灯相位）
 触发边沿  rising / falling / none / risingOrFalling
 
 不支持（记入 unsupported，不静默跳过）
 ------------------------------------
-CollisionCondition、TimeToCollisionCondition、RelativeSpeedCondition、
-AccelerationCondition、Story 分支、EntitySelection、Catalog、
-TrafficSignalControllerAction、FollowTrajectoryAction
+Story 分支、EntitySelection、Catalog、参数化条件、绝对目标车道
 
 已知简化
 --------
-- 跟驰用 P 控制而非 OSC 的完整语义
-- 变道用纯追踪转向，不保证与真实车辆动力学一致
+- 跟驰用 IDM（智能驾驶员模型），参数取舒适型标定，而非 OSC 的完整语义
+- 变道用纯追踪转向，并按横向加速度上限对转向做限幅
 - ConditionEdge 只做基本的沿检测（按上一帧比较）
 - 不考虑 freespace / alongroute 的坐标语义，一律按直线距离
+- 信号灯条件按"自车前方最近的红绿灯"取实际状态，忽略控制器内部的
+  相位时长模型
 """
 from __future__ import annotations
 
@@ -77,17 +89,28 @@ class XoscPosition:
     z: float = 0.0
     s: float = 0.0
     lane_offset: float = 0.0
+    lane_id: str = ""
+    road_id: str = ""
 
 
 @dataclass
 class XoscTrigger:
-    kind: str = "time"         # time / distance / time_headway / speed / standstill / reach_position
+    # time / distance / time_headway / speed / standstill / reach_position /
+    # collision / time_to_collision / relative_speed / acceleration /
+    # offroad / end_of_road / traveled_distance / relative_distance /
+    # relative_angle / traffic_signal
+    kind: str = "time"
     value: float = 0.0
     rule: str = "greaterThan"
     entity_ref: str = ""
     position: Optional[XoscPosition] = None
     tolerance: float = 1.0
     edge: str = "rising"
+    # 条件求值的主体（TriggeringEntities）；空表示用事件所属实体
+    triggering_entity: str = ""
+    # traffic_signal 用：控制器名（player 里映射到前方红绿灯）与目标相位
+    signal_controller: str = ""
+    signal_phase: str = ""
     # 运行时状态
     _prev: Optional[bool] = None
     _since: Optional[float] = None
@@ -99,12 +122,16 @@ class XoscTrigger:
 
 @dataclass
 class XoscAction:
-    kind: str = "speed"        # speed / follow / lane_change / lane_offset
+    # speed / relative_speed / follow / lane_change / lane_offset /
+    # lateral_distance / follow_trajectory / traffic_light
+    kind: str = "speed"
     value: float = 0.0
     shape: str = "step"
     dynamics_value: float = 0.0
     target_entity: str = ""
     lane_delta: int = 0
+    # traffic_light 用：目标相位（green / yellow / red / off）
+    phase: str = ""
     # follow_trajectory 用：[[t, x, y], ...]
     points: List[List[float]] = field(default_factory=list)
     # 运行时状态
@@ -165,13 +192,21 @@ _SUPPORTED_CONDITIONS = {
     "SpeedCondition": "speed",
     "StandStillCondition": "standstill",
     "ReachPositionCondition": "reach_position",
+    "CollisionCondition": "collision",
+    "TimeToCollisionCondition": "time_to_collision",
+    "RelativeSpeedCondition": "relative_speed",
+    "AccelerationCondition": "acceleration",
+    "OffroadCondition": "offroad",
+    "EndOfRoadCondition": "end_of_road",
+    "TraveledDistanceCondition": "traveled_distance",
+    "RelativeDistanceCondition": "relative_distance",
+    "RelativeAngleCondition": "relative_angle",
+    "TrafficSignalCondition": "traffic_signal",
 }
 
+# 仍未实现的条件（解析时记入 unsupported）
 _KNOWN_UNSUPPORTED = {
-    "CollisionCondition", "TimeToCollisionCondition",
-    "RelativeSpeedCondition", "AccelerationCondition",
-    "OffroadCondition", "EndOfRoadCondition", "TraveledDistanceCondition",
-    "RelativeDistanceCondition", "RelativeAngleCondition",
+    "ParameterCondition", "TimeOfDayCondition", "UserDefinedValueCondition",
 }
 
 
@@ -200,7 +235,9 @@ def _parse_position(pos_el) -> Optional[XoscPosition]:
     if lp is not None:
         return XoscPosition(kind="lane",
                             s=float(lp.get("s", 0) or 0),
-                            lane_offset=float(lp.get("offset", 0) or 0))
+                            lane_offset=float(lp.get("offset", 0) or 0),
+                            lane_id=lp.get("laneId", "") or "",
+                            road_id=lp.get("roadId", "") or "")
     return None
 
 
@@ -268,6 +305,43 @@ def _parse_condition(cond_el, fallback_entity: str) -> Optional[XoscTrigger]:
             ref = er.get("entityRef", "") if er is not None else ""
             return XoscTrigger(kind="collision", rule="equalTo",
                                entity_ref=ref, edge=edge)
+        if tag == "AccelerationCondition":
+            return XoscTrigger(kind="acceleration",
+                               value=float(deep.get("value", 0) or 0),
+                               rule=deep.get("rule", "greaterThan"),
+                               edge=edge)
+        if tag == "OffroadCondition":
+            return XoscTrigger(kind="offroad", rule="greaterOrEqual",
+                               value=float(deep.get("duration", 0) or 0),
+                               edge=edge)
+        if tag == "EndOfRoadCondition":
+            return XoscTrigger(kind="end_of_road", rule="greaterOrEqual",
+                               value=float(deep.get("duration", 0) or 0),
+                               edge=edge)
+        if tag == "TraveledDistanceCondition":
+            return XoscTrigger(kind="traveled_distance",
+                               value=float(deep.get("value", 0) or 0),
+                               rule=deep.get("rule", "greaterThan"),
+                               edge=edge)
+        if tag == "RelativeDistanceCondition":
+            return XoscTrigger(kind="relative_distance",
+                               value=float(deep.get("value", 0) or 0),
+                               rule=deep.get("rule", "lessThan"),
+                               entity_ref=deep.get("entityRef", ""),
+                               edge=edge)
+        if tag == "RelativeAngleCondition":
+            return XoscTrigger(kind="relative_angle",
+                               value=float(deep.get("angle", 0) or 0),
+                               tolerance=float(
+                                   deep.get("angleTolerance", 0) or 0),
+                               rule="equalTo",
+                               entity_ref=deep.get("entityRef", ""),
+                               edge=edge)
+        if tag == "TrafficSignalCondition":
+            return XoscTrigger(kind="traffic_signal", rule="equalTo",
+                               signal_controller=deep.get("name", "") or "",
+                               signal_phase=deep.get("state", "") or "",
+                               edge=edge)
     return None
 
 
@@ -420,6 +494,22 @@ def _parse_actions(pa_list, unsupported: List[str], event_name: str
     return out
 
 
+def _parse_global_actions(ga_list, unsupported: List[str],
+                          event_name: str) -> List[XoscAction]:
+    """解析 Event 里的 GlobalAction（目前只支持信号灯控制）。"""
+    out: List[XoscAction] = []
+    for ga in ga_list:
+        tsc = ga.find(".//TrafficSignalControllerAction")
+        if tsc is not None:
+            out.append(XoscAction(
+                kind="traffic_light",
+                phase=tsc.get("phase", "") or "",
+                target_entity=tsc.get("trafficSignalControllerRef", "") or ""))
+            continue
+        unsupported.append("事件 %s 的全局动作未识别" % event_name)
+    return out
+
+
 def parse_xosc(path: str) -> XoscScenario:
     if not os.path.exists(path):
         raise XoscPlayerError("文件不存在: %s" % path)
@@ -458,6 +548,10 @@ def parse_xosc(path: str) -> XoscScenario:
                         ent.position_kind = "lane"
                         ent.lane_s = pos.s
                         ent.lane_offset = pos.lane_offset
+                        if pos.lane_id:
+                            ent.lane_id = pos.lane_id
+                        if pos.road_id:
+                            ent.road_id = pos.road_id
             longi = pa.find("LongitudinalAction")
             if longi is not None:
                 v = _find_target_speed(longi)
@@ -479,6 +573,13 @@ def parse_xosc(path: str) -> XoscScenario:
             for cond in ev.findall("./StartTrigger/ConditionGroup/Condition"):
                 trig = _parse_condition(cond, actor)
                 if trig is not None:
+                    # OSC 的条件作用在 TriggeringEntities 上，未声明时才回落到
+                    # ManeuverGroup 的 Actor。之前一律用 Actor，导致"前车静止
+                    # 后跟驰"这类条件永远判在自己身上（后车永不进入跟驰）。
+                    ref = cond.find(
+                        "./ByEntityCondition/TriggeringEntities/EntityRef")
+                    if ref is not None:
+                        trig.triggering_entity = ref.get("entityRef", "")
                     break
                 # 记录不支持的
                 for deep in cond.iter():
@@ -493,6 +594,8 @@ def parse_xosc(path: str) -> XoscScenario:
 
             actions = _parse_actions(ev.findall("./Action/PrivateAction"),
                                      sc.unsupported, name)
+            actions += _parse_global_actions(ev.findall("./Action/GlobalAction"),
+                                             sc.unsupported, name)
             if not actions:
                 continue
             sc.events.append(XoscEvent(name=name, entity=actor,
@@ -526,15 +629,53 @@ def _distance(a: carla.Location, b: carla.Location) -> float:
     return math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2 + (a.z - b.z) ** 2)
 
 
+def _lane_waypoint(world: carla.World, road_id: str, lane_id: str,
+                   s: float):
+    """按 OpenDRIVE 的 (roadId, laneId, s) 取路点。
+
+    优先用 CARLA 的 get_waypoint_xodr 精确解析；失败时退化为"同车道里
+    s 最接近"的路点，避免把 s 当成世界坐标 x 去最近邻（旧实现的 bug）。
+    """
+    amap = world.get_map()
+    try:
+        if road_id and lane_id:
+            wp = amap.get_waypoint_xodr(int(float(road_id)),
+                                        int(float(lane_id)), float(s))
+            if wp is not None:
+                return wp
+    except Exception:
+        pass
+    if not lane_id:
+        return None
+    cand = [w for w in amap.generate_waypoints(2.0)
+            if str(w.lane_id) == str(lane_id)]
+    if not cand:
+        return None
+    return min(cand, key=lambda w: abs(float(w.s) - float(s)))
+
+
+def _apply_lane_offset(wp, offset: float) -> carla.Location:
+    """车道中心 + 横向偏移（OSC 约定：正值向行驶方向左侧）。"""
+    if abs(offset) < 1e-6:
+        return wp.transform.location
+    yaw = math.radians(wp.transform.rotation.yaw)
+    return wp.transform.location + carla.Location(
+        x=math.sin(yaw) * offset, y=-math.cos(yaw) * offset, z=0.0)
+
+
 def _resolve_position(world: carla.World, pos: XoscPosition) -> carla.Location:
     if pos.kind == "world":
         return carla.Location(x=pos.x, y=pos.y, z=pos.z)
+    wp = _lane_waypoint(world, pos.road_id, pos.lane_id, pos.s)
+    if wp is not None:
+        return _apply_lane_offset(wp, pos.lane_offset)
+    # 极端兜底：路网里找不到该车道时，按世界坐标找最近路点
     wps = world.get_map().generate_waypoints(4.0)
     if not wps:
         raise XoscPlayerError("路网没有车道点，无法解析 LanePosition")
     target = carla.Location(x=pos.s, y=pos.lane_offset, z=0.0)
-    wp = min(wps, key=lambda w: w.transform.location.distance(target))
-    return wp.transform.location
+    return min(wps, key=lambda w: w.transform.location.distance(target)
+               ).transform.location
 
 
 def _speed_of(actor) -> float:
@@ -542,10 +683,91 @@ def _speed_of(actor) -> float:
     return math.sqrt(v.x ** 2 + v.y ** 2 + v.z ** 2)
 
 
+def _accel_of(actor) -> float:
+    a = actor.get_acceleration()
+    return math.sqrt(a.x ** 2 + a.y ** 2 + a.z ** 2)
+
+
+def _yaw_diff_deg(a, b) -> float:
+    """两车航向夹角（度，0~180）。"""
+    d = (a.get_transform().rotation.yaw - b.get_transform().rotation.yaw) % 360.0
+    return abs(d - 360.0) if d > 180.0 else abs(d)
+
+
+def _distance_to_road_end(world: carla.World, actor) -> float:
+    """沿当前车道向前探测，估算到路段末端的距离（米）。"""
+    amap = world.get_map()
+    wp = amap.get_waypoint(_loc_of(actor), project_to_road=True)
+    if wp is None:
+        return 0.0
+    road_id, lane_id = wp.road_id, wp.lane_id
+    cur = wp
+    remaining = 0.0
+    for _ in range(60):
+        nxt = [w for w in cur.next(5.0)
+               if w.road_id == road_id and w.lane_id == lane_id]
+        if not nxt:
+            return remaining
+        cur = nxt[0]
+        remaining += 5.0
+    return remaining
+
+
+# 信号灯相位别名（OSC 的相位名是自由文本，这里做常见别名归一）
+_PHASE_ALIASES = {
+    "green": {"green", "go", "绿", "绿灯"},
+    "yellow": {"yellow", "amber", "黄", "黄灯"},
+    "red": {"red", "stop", "红", "红灯"},
+    "off": {"off", "关", "关闭"},
+}
+
+
+def _canonical_phase(name: str) -> str:
+    low = (name or "").strip().lower()
+    for canon, aliases in _PHASE_ALIASES.items():
+        if low in aliases:
+            return canon
+    return low
+
+
+_CARLA_SIGNAL_STATES = {
+    "green": carla.TrafficLightState.Green,
+    "yellow": carla.TrafficLightState.Yellow,
+    "red": carla.TrafficLightState.Red,
+    "off": carla.TrafficLightState.Off,
+}
+
+
+def _traffic_light_ahead(actor, max_dist: float = 80.0):
+    """取自车前方最近的一盏红绿灯；没有则返回 None。"""
+    world = actor.get_world()
+    wp = world.get_map().get_waypoint(_loc_of(actor))
+    if wp is None:
+        return None
+    try:
+        lights = world.get_traffic_lights_from_waypoint(wp, max_dist)
+    except Exception:
+        return None
+    loc = _loc_of(actor)
+    yaw = math.radians(_yaw_of(actor))
+    fx, fy = math.cos(yaw), math.sin(yaw)
+    best, best_d = None, float("inf")
+    for lt in lights:
+        d = _loc_of(lt) - loc
+        if d.x * fx + d.y * fy <= 0:
+            continue
+        dist = math.hypot(d.x, d.y)
+        if dist < best_d:
+            best, best_d = lt, dist
+    return best
+
+
 def _evaluate(world: carla.World, trig: XoscTrigger, actors: Dict[str, carla.Actor],
-              self_actor: carla.Actor, now: float) -> bool:
+              self_actor: carla.Actor, now: float,
+              state: Optional[Dict[str, Any]] = None) -> bool:
     """求值一个触发条件（不含边沿检测）。"""
     rule = _RULES.get(trig.rule, _RULES["greaterThan"])
+    state = state or {}
 
     if trig.kind == "time":
         return rule(now, trig.value)
@@ -553,9 +775,37 @@ def _evaluate(world: carla.World, trig: XoscTrigger, actors: Dict[str, carla.Act
     if trig.kind == "speed":
         return rule(_speed_of(self_actor), trig.value)
 
+    if trig.kind == "acceleration":
+        return rule(_accel_of(self_actor), trig.value)
+
+    if trig.kind == "traveled_distance":
+        name = self_actor.attributes.get("role_name", "")
+        traveled = (state.get("traveled") or {}).get(name, 0.0)
+        return rule(traveled, trig.value)
+
     if trig.kind == "standstill":
         slow = _speed_of(self_actor) < 0.15
         if not slow:
+            trig._since = None
+            return False
+        if trig._since is None:
+            trig._since = now
+        return (now - trig._since) >= trig.value
+
+    if trig.kind == "offroad":
+        wp = world.get_map().get_waypoint(_loc_of(self_actor),
+                                          project_to_road=False)
+        off = wp is None or wp.lane_type != carla.LaneType.Driving
+        if not off:
+            trig._since = None
+            return False
+        if trig._since is None:
+            trig._since = now
+        return (now - trig._since) >= trig.value
+
+    if trig.kind == "end_of_road":
+        near_end = _distance_to_road_end(world, self_actor) <= 2.0
+        if not near_end:
             trig._since = None
             return False
         if trig._since is None:
@@ -587,6 +837,29 @@ def _evaluate(world: carla.World, trig: XoscTrigger, actors: Dict[str, carla.Act
         if other is None or other is self_actor:
             return False
         return rule(_speed_of(self_actor) - _speed_of(other), trig.value)
+
+    if trig.kind == "relative_distance":
+        other = actors.get(trig.entity_ref) if trig.entity_ref else None
+        if other is None or other is self_actor:
+            return False
+        return rule(_distance(_loc_of(self_actor), _loc_of(other)), trig.value)
+
+    if trig.kind == "relative_angle":
+        other = actors.get(trig.entity_ref) if trig.entity_ref else None
+        if other is None or other is self_actor:
+            return False
+        diff = _yaw_diff_deg(self_actor, other)
+        return abs(diff - trig.value) <= max(trig.tolerance, 1e-3)
+
+    if trig.kind == "traffic_signal":
+        light = _traffic_light_ahead(self_actor)
+        if light is None:
+            return False
+        try:
+            actual = light.state.name
+        except Exception:
+            return False
+        return _canonical_phase(actual) == _canonical_phase(trig.signal_phase)
 
     if trig.kind == "time_to_collision":
         other = actors.get(trig.entity_ref) if trig.entity_ref else None
@@ -630,9 +903,14 @@ def _edge_ok(trig: XoscTrigger, now_value: bool) -> bool:
 
 
 # ---------------------------------------------------------------- 控制
-def _drive_towards(actor, target: carla.Location, target_speed: float,
-                   speed_now: float) -> None:
-    """简单纯追踪：朝目标点转向，按速度误差给油门/刹车。"""
+# 横向加速度限幅用：steer=1 时曲率约 0.12 1/m（按 CARLA 车辆几何标定），
+# 由 kappa = g * steer 近似，用于把转向约束在 ay = v^2 * kappa 以内。
+_STEER_TO_KAPPA = 0.12
+
+
+def _steer_towards(actor, target: carla.Location,
+                   max_lat_acc: float = 0.0) -> float:
+    """纯追踪求转向量；给出 max_lat_acc 时按横向加速度上限限幅。"""
     tf = actor.get_transform()
     loc = tf.location
     yaw = math.radians(tf.rotation.yaw)
@@ -644,16 +922,32 @@ def _drive_towards(actor, target: carla.Location, target_speed: float,
     fy = dx * math.sin(-yaw) + dy * math.cos(-yaw)
 
     dist = math.hypot(fx, fy)
-    if dist < 0.5:
-        steer = 0.0
-    elif fx <= 0.5:
+    if dist < 0.5 or fx <= 0.5:
         # 目标落到车后或几乎在正侧方：不要再打方向，否则会原地画圈。
-        # 保持直行，等下一帧目标回到前方。
-        steer = 0.0
-    else:
-        angle = math.degrees(math.atan2(fy, fx))
-        steer = max(-1.0, min(1.0, angle / 40.0))
+        return 0.0
+    angle = math.degrees(math.atan2(fy, fx))
+    steer = max(-1.0, min(1.0, angle / 40.0))
 
+    if max_lat_acc > 0:
+        v = max(_speed_of(actor), 1.0)
+        # ay = v^2 * kappa <= max_lat_acc  =>  steer <= max_lat_acc/(v^2*g)
+        lim = max_lat_acc / (v * v * _STEER_TO_KAPPA)
+        steer = max(-min(1.0, lim), min(min(1.0, lim), steer))
+    return steer
+
+
+def _accel_to_control(accel: float, speed_now: float):
+    """把期望加速度映射成油门/刹车。"""
+    if accel >= 0:
+        throttle = min(0.85, 0.12 + accel * 0.22)
+        return throttle, 0.0
+    return 0.0, min(1.0, -accel / 6.0)
+
+
+def _drive_towards(actor, target: carla.Location, target_speed: float,
+                   speed_now: float, max_lat_acc: float = 0.0) -> None:
+    """简单纯追踪：朝目标点转向，按速度误差给油门/刹车。"""
+    steer = _steer_towards(actor, target, max_lat_acc)
     err = target_speed - speed_now
     if err > 0.5:
         throttle, brake = min(0.9, 0.3 + err * 0.15), 0.0
@@ -662,6 +956,39 @@ def _drive_towards(actor, target: carla.Location, target_speed: float,
     else:
         throttle, brake = 0.35, 0.0
 
+    actor.apply_control(carla.VehicleControl(throttle=throttle, steer=steer,
+                                             brake=brake))
+
+
+def _idm_accel(speed: float, desired_speed: float, gap: float,
+               rel_speed: float, s0: float = 2.0) -> float:
+    """IDM（智能驾驶员模型）加速度。
+
+    a = a_max * [1 - (v/v0)^4 - (s*/gap)^2]
+    s* = s0 + max(0, v*T + v*dv/(2*sqrt(a_max*b)))
+    gap 为车头净距（前车尾到自车头），rel_speed 为自车 - 前车速度，
+    s0 为期望的最小净距（OSC LongitudinalDistanceAction 的 distance）。
+    """
+    a_max, b, t_head = 2.0, 3.0, 1.2
+    v0 = max(desired_speed, 0.1)
+    s_star = s0 + max(0.0, speed * t_head
+                      + speed * rel_speed / (2.0 * math.sqrt(a_max * b)))
+    net = max(gap, 0.5)
+    return a_max * (1.0 - (speed / v0) ** 4 - (s_star / net) ** 2)
+
+
+def _idm_follow(actor, lead, gap_target: float, speed_now: float,
+                max_speed: float, steer_target=None) -> None:
+    """IDM 跟驰：保持 gap_target 的净距，必要时刹停。"""
+    gap = _distance(_loc_of(actor), _loc_of(lead)) - 5.0
+    rel = speed_now - _speed_of(lead)
+    # 期望速度取场景给定值；前车速度只通过 IDM 的交互项影响减速度。
+    # （若把 v0 绑成"前车速度+1.5"，前车停住后自车会一直以 1.5 m/s 蠕行）
+    v0 = max(min(max_speed, 30.0), 0.1)
+    a = _idm_accel(speed_now, v0, gap, rel,
+                   s0=max(2.0, min(40.0, gap_target)))
+    throttle, brake = _accel_to_control(a, speed_now)
+    steer = _steer_towards(actor, steer_target) if steer_target is not None else 0.0
     actor.apply_control(carla.VehicleControl(throttle=throttle, steer=steer,
                                              brake=brake))
 
@@ -752,6 +1079,20 @@ def _lane_target(actor, delta: int, lookahead: float = 8.0
         return None
 
 
+def _lane_center_ahead(actor, lookahead: float = 8.0
+                       ) -> Optional[carla.Location]:
+    """当前车道上、前方 lookahead 米处的车道中心点（用于保持直线）。"""
+    try:
+        wp = actor.get_world().get_map().get_waypoint(
+            actor.get_transform().location)
+        if wp is None:
+            return None
+        ahead = wp.next(lookahead)
+        return ahead[0].transform.location if ahead else None
+    except Exception:
+        return None
+
+
 # =====================================================================
 # 播放
 # =====================================================================
@@ -795,6 +1136,10 @@ def play(world: carla.World, scenario: XoscScenario,
     lateral_ctrl: Dict[str, Dict[str, Any]] = {}
     # 轨迹跟随的：entity -> {points, start}
     traj_ctrl: Dict[str, Dict[str, Any]] = {}
+    # IDM 跟驰的：entity -> {ref, gap}
+    follow_ctrl: Dict[str, Dict[str, Any]] = {}
+    # 运行期状态：累计里程 / 上一帧位置
+    state: Dict[str, Any] = {"traveled": {}, "last": {}}
 
     try:
         # 1) 布景
@@ -805,13 +1150,15 @@ def play(world: carla.World, scenario: XoscScenario,
                         carla.Location(x=ent.x, y=ent.y, z=max(ent.z, 0.0) + 0.3),
                         carla.Rotation(yaw=ent.h))
                 else:
-                    wps = world.get_map().generate_waypoints(4.0)
-                    if not wps:
-                        raise XoscPlayerError("路网没有车道点")
-                    tgt = carla.Location(x=ent.lane_s, y=ent.lane_offset, z=0.0)
-                    wp = min(wps, key=lambda w: w.transform.location.distance(tgt))
+                    wp = _lane_waypoint(world, ent.road_id, ent.lane_id,
+                                        ent.lane_s)
+                    if wp is None:
+                        raise XoscPlayerError(
+                            "找不到车道 roadId=%s laneId=%s s=%.1f"
+                            % (ent.road_id, ent.lane_id, ent.lane_s))
+                    loc = _apply_lane_offset(wp, ent.lane_offset)
                     tf = carla.Transform(
-                        wp.transform.location + carla.Location(z=0.35),
+                        loc + carla.Location(z=0.35),
                         wp.transform.rotation)
             except Exception as e:
                 errors.append("%s 定位失败: %s" % (ent.name, e))
@@ -827,6 +1174,10 @@ def play(world: carla.World, scenario: XoscScenario,
                 continue
             actors[ent.name] = actor
             target_speed[ent.name] = ent.initial_speed
+            try:
+                actor.set_attribute("role_name", ent.name)
+            except Exception:
+                pass
 
         if not actors:
             raise XoscPlayerError("没有任何实体成功布景")
@@ -854,8 +1205,13 @@ def play(world: carla.World, scenario: XoscScenario,
                 actor = actors.get(ev.entity)
                 if actor is None:
                     continue
+                # 条件可能声明了 TriggeringEntities（如"前车静止"），
+                # 此时求值主体是它，而不是事件所属实体。
+                evaluator = actor
+                if ev.trigger.triggering_entity:
+                    evaluator = actors.get(ev.trigger.triggering_entity) or actor
                 try:
-                    val = _evaluate(world, ev.trigger, actors, actor, t)
+                    val = _evaluate(world, ev.trigger, actors, evaluator, t, state)
                 except Exception as e:
                     errors.append("条件求值失败 %s: %s" % (ev.name, e))
                     continue
@@ -872,7 +1228,8 @@ def play(world: carla.World, scenario: XoscScenario,
                     # 转向类动作要用 apply_control，必须先退出恒速模式，
                     # 否则恒速会一直覆盖转向，车会被推着直走或打转。
                     if act.kind in ("lane_change", "lane_offset",
-                                    "lateral_distance", "follow_trajectory"):
+                                    "lateral_distance", "follow_trajectory",
+                                    "follow"):
                         try:
                             actor.disable_constant_velocity()
                         except Exception:
@@ -903,6 +1260,24 @@ def play(world: carla.World, scenario: XoscScenario,
                             "points": act.points,
                             "start": t,
                         }
+                    elif act.kind == "follow":
+                        follow_ctrl[ev.entity] = {
+                            "ref": act.target_entity, "gap": act.value}
+                    elif act.kind == "traffic_light":
+                        light = _traffic_light_ahead(actor)
+                        if light is None:
+                            errors.append(
+                                "%s 附近没有红绿灯，跳过相位切换" % ev.name)
+                        else:
+                            try:
+                                # 冻结自动循环，保证相位可控可复现
+                                light.freeze(True)
+                                light.set_state(_CARLA_SIGNAL_STATES[
+                                    _canonical_phase(act.phase)])
+                            except Exception as e:
+                                errors.append("设置红绿灯失败 %s: %s"
+                                              % (ev.name, e))
+                        act._done = True
 
             # --- 持续动作 ---
             for ev in scenario.events:
@@ -926,10 +1301,8 @@ def play(world: carla.World, scenario: XoscScenario,
                     elif act.kind == "follow":
                         other = actors.get(act.target_entity)
                         if other is not None:
-                            gap = _distance(_loc_of(actor), _loc_of(other))
-                            err = gap - act.value
-                            target_speed[ev.entity] = max(
-                                0.0, min(25.0, sp + err * 0.6))
+                            follow_ctrl[ev.entity] = {
+                                "ref": act.target_entity, "gap": act.value}
                     elif act.kind == "relative_speed":
                         # 目标速度 = 参照实体速度 + delta，每帧跟随
                         other = actors.get(act.target_entity)
@@ -954,7 +1327,8 @@ def play(world: carla.World, scenario: XoscScenario,
                         errors.append("%s 找不到相邻车道" % name)
                         lc["done"] = True
                     else:
-                        _drive_towards(actor, tgt, lc["speed"], _speed_of(actor))
+                        _drive_towards(actor, tgt, lc["speed"], _speed_of(actor),
+                                       max_lat_acc=3.0)
                         if t >= lc["until"]:
                             lc["done"] = True
                     continue
@@ -992,11 +1366,22 @@ def play(world: carla.World, scenario: XoscScenario,
                         _drive_towards(actor, tgt, v_des, _speed_of(actor))
                         continue
 
+                if name in follow_ctrl and actor.type_id.startswith("vehicle."):
+                    fc = follow_ctrl[name]
+                    lead = actors.get(fc["ref"])
+                    if lead is not None and lead is not actor:
+                        _idm_follow(actor, lead, fc["gap"], _speed_of(actor),
+                                    max(target_speed.get(name, 12.0), 8.0),
+                                    _lane_center_ahead(actor))
+                        continue
+
                 v = target_speed.get(name, 0.0)
                 if actor.type_id.startswith("vehicle."):
-                    yaw = math.radians(_yaw_of(actor))
-                    actor.enable_constant_velocity(carla.Vector3D(
-                        x=v * math.cos(yaw), y=v * math.sin(yaw), z=0.0))
+                    # enable_constant_velocity 期望**车体坐标系**下的速度
+                    # （+x 为车头方向）。之前按世界坐标传入，在朝向 ±180°
+                    # 的路上会把车开成倒车——内置地图上尤其明显。
+                    actor.enable_constant_velocity(
+                        carla.Vector3D(x=v, y=0.0, z=0.0))
 
             # --- 截图 ---
             while cap_idx < len(capture_at) and capture_at[cap_idx] <= t + 1e-6:
@@ -1028,10 +1413,10 @@ def play(world: carla.World, scenario: XoscScenario,
                         span = max(
                             [math.hypot(l.x - c0.x, l.y - c0.y) for l in others]
                             or [20.0])
-                        # 相机高度 = 视野半宽（水平 FOV 90°）。取值 40~80 m：
-                        # 太小切掉远处实体，太大车缩成几个像素。不能直接
-                        # 用 span——场景里常有远处的行人/对向车。
-                        cam_z = min(max(span * 0.9, 40.0), 80.0)
+                        # 相机高度按最远实体撑开（垂直 FOV 约 59°，半高约
+                        # 0.56*z）。取 1.85 倍 span 才装得下"前后都有车"的
+                        # 跟驰场景；上限 80 m 避免车缩成像素。
+                        cam_z = min(max(span * 1.85, 40.0), 80.0)
 
                         # 每次截图新建相机，而不是复用并 set_transform。
                         # 复用 + set_transform 实测拿到的仍是移动前的画面
@@ -1070,6 +1455,17 @@ def play(world: carla.World, scenario: XoscScenario,
                             if cams and cams[-1][0] is cam:
                                 cams.pop()
                 cap_idx += 1
+
+            # --- 累计里程（traveled_distance 条件用）---
+            for nm, ac in actors.items():
+                if not ac.is_alive:
+                    continue
+                cur = _loc_of(ac)
+                last = state["last"].get(nm)
+                if last is not None:
+                    state["traveled"][nm] = (
+                        state["traveled"].get(nm, 0.0) + _distance(cur, last))
+                state["last"][nm] = cur
 
             world.tick()
 

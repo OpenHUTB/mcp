@@ -4,3 +4,6 @@ aiohttp
 hutb\PythonAPI\carla\dist\hutb-2.9.16-cp310-cp310-win_amd64.whl
 fastmcp
 loguru
+scenariogeneration>=0.16.0
+lxml>=5.0.0
+opencv-python>=4.8.0

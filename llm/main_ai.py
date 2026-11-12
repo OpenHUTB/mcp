@@ -5621,7 +5621,8 @@ async def run_scenario_in_carla_impl(template: str = "lead_brake",
                                      capture_times: str = "2,5",
                                      out_dir: str = "",
                                      host: str = "127.0.0.1",
-                                     port: int = 2000) -> str:
+                                     port: int = 2000,
+                                     map_name: str = "") -> str:
     """把生成的 .xosc 在 CARLA 里播放并截图。"""
     import sys as _sys
 
@@ -5669,20 +5670,28 @@ async def run_scenario_in_carla_impl(template: str = "lead_brake",
     except ImportError as e:
         return "❌ 缺少 road_builder：%s" % e
 
-    if xodr_layout not in DEFAULT_PARAMS:
-        return "❌ 未知路网布局 `%s`" % xodr_layout
-    xodr_dir = base / "xodr"
-    xodr_dir.mkdir(parents=True, exist_ok=True)
-    xodr_file = xodr_dir / ("%s.xodr" % xodr_layout)
-    write(xodr_layout, str(xodr_file))
-    info = inspect_road(str(xodr_file))
-    if not info["valid"]:
-        return "❌ 路网无效：%s" % info["error"]
+    xodr_file = None
+    if map_name:
+        # 用内置地图：地图自带真实路网与红绿灯，LanePosition 按地图解析
+        pass
+    else:
+        if xodr_layout not in DEFAULT_PARAMS:
+            return "❌ 未知路网布局 `%s`" % xodr_layout
+        xodr_dir = base / "xodr"
+        xodr_dir.mkdir(parents=True, exist_ok=True)
+        xodr_file = xodr_dir / ("%s.xodr" % xodr_layout)
+        write(xodr_layout, str(xodr_file))
+        info = inspect_road(str(xodr_file))
+        if not info["valid"]:
+            return "❌ 路网无效：%s" % info["error"]
 
     # 3) 连接并播放
     try:
         client = CR.connect(host, port)
-        world = CR.load_xodr_world(client, str(xodr_file))
+        if map_name:
+            world = CR.load_builtin_world(client, map_name)
+        else:
+            world = CR.load_xodr_world(client, str(xodr_file))
         CR.clear_actors(world)
     except Exception as e:
         return "❌ CARLA 准备失败：%s" % e
@@ -5717,12 +5726,12 @@ async def run_scenario_in_carla(template: str = "lead_brake",
                                 capture_times: str = "2,5",
                                 out_dir: str = "",
                                 host: str = "127.0.0.1",
-                                port: int = 2000) -> str:
+                                port: int = 2000,
+                                map_name: str = "") -> str:
     """在 CARLA 里播放生成的 OpenSCENARIO 场景并截图（需要 CarlaUE4 已启动）。
 
-    这是轻量播放器：解析 .xosc 的实体与时间触发，按 StartTrigger 下发
-    速度动作，跑固定时长并截图。只覆盖本项目模板能表达的子集——
-    时距/距离等 EntityTrigger、变道、跟驰会记入"未执行"而不是静默跳过。
+    这是轻量播放器：解析 .xosc 的实体与触发条件，按 StartTrigger 下发动作，
+    跑固定时长并截图。
 
     Args:
         template: 场景模板名（与 xosc_path 二选一）
@@ -5731,10 +5740,158 @@ async def run_scenario_in_carla(template: str = "lead_brake",
         duration: 播放时长（0 表示用场景自己的 StopTrigger）
         capture_times: 截图时刻，逗号分隔，如 "2,5,8"
         out_dir: 截图目录
+        map_name: 用 CARLA 内置地图承载（如 Town03），填了就忽略 xodr_layout；
+                  红绿灯类场景必须用内置地图
     """
     return await run_scenario_in_carla_impl(template, xosc_path, xodr_layout,
                                             duration, capture_times, out_dir,
-                                            host, port)
+                                            host, port, map_name)
+
+
+async def run_traffic_light_demo_impl(map_name: str = "Town03",
+                                      red_hold: float = 4.0,
+                                      duration: float = 16.0,
+                                      capture_times: str = "1,3,6,10",
+                                      out_dir: str = "",
+                                      host: str = "127.0.0.1",
+                                      port: int = 2000) -> str:
+    """在真实地图上演示信号灯条件与信号灯动作。
+
+    做法：
+      1. 从地图里挑一盏红绿灯，沿来车方向后退约 35m 作为自车起点；
+      2. 脚本在 t=0 把灯冻结为红灯；
+      3. 自车用 TrafficSignalCondition(red) 保持静止；
+      4. t=red_hold 时用 TrafficSignalControllerAction 切绿，
+         自车用 TrafficSignalCondition(green) 触发起步。
+    """
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    try:
+        import carla
+        from xosc_player import (XoscAction, XoscEntity, XoscEvent,
+                                 XoscScenario, XoscTrigger, play, summarize)
+        import carla_runner as CR
+    except ImportError as e:
+        return "❌ 导入失败（需要 carla 包）：%s" % e
+
+    base = Path(__file__).parent / "output" / "xosc_run"
+    shot_dir = Path(out_dir) if out_dir else (base / "shots" / "traffic_light")
+
+    try:
+        client = CR.connect(host, port)
+        world = CR.load_builtin_world(client, map_name)
+        CR.clear_actors(world)
+    except Exception as e:
+        return "❌ CARLA 准备失败：%s" % e
+
+    amap = world.get_map()
+    lights = [a for a in world.get_actors().filter("traffic.traffic_light")]
+    if not lights:
+        return "❌ 地图 %s 内没有红绿灯，请换 Town03/Town10HD 等城市地图" % map_name
+
+    start_tf = None
+    light = None
+    for lt in lights:
+        wp = amap.get_waypoint(lt.get_transform().location)
+        if wp is None:
+            continue
+        cur, walked = wp, 0.0
+        ok = True
+        while walked < 35.0:
+            prev = [w for w in cur.previous(2.0)
+                    if w.lane_type == carla.LaneType.Driving]
+            if not prev:
+                ok = False
+                break
+            cur, walked = prev[0], walked + 2.0
+        if ok:
+            light, start_tf = lt, cur.transform
+            break
+    if light is None or start_tf is None:
+        return "❌ 没有找到可用于演示的红绿灯（找不到足够长的来车车道）"
+
+    # 组装场景：红灯等待 -> 脚本切绿 -> 绿灯起步
+    sc = XoscScenario(name="traffic_light_demo", stop_time=duration)
+    sc.entities = [XoscEntity(
+        name="ego", kind="vehicle", position_kind="world",
+        x=start_tf.location.x, y=start_tf.location.y, z=start_tf.location.z,
+        h=start_tf.rotation.yaw, initial_speed=0.0)]
+    sc.events = [
+        XoscEvent(name="force_red", entity="ego",
+                  trigger=XoscTrigger(kind="time", value=0.0),
+                  actions=[XoscAction(kind="traffic_light", phase="red")]),
+        XoscEvent(name="hold_red", entity="ego",
+                  trigger=XoscTrigger(kind="traffic_signal", signal_phase="red"),
+                  actions=[XoscAction(kind="speed", value=0.0)]),
+        XoscEvent(name="force_green", entity="ego",
+                  trigger=XoscTrigger(kind="time", value=red_hold),
+                  actions=[XoscAction(kind="traffic_light", phase="green")]),
+        XoscEvent(name="go_green", entity="ego",
+                  trigger=XoscTrigger(kind="traffic_signal",
+                                      signal_phase="green"),
+                  actions=[XoscAction(kind="speed", value=8.0,
+                                      shape="linear", dynamics_value=2.0)]),
+    ]
+
+    # 播放前先把灯置红并 tick 一次：TrafficLight.state 要等服务器下一帧
+    # 才更新，否则开场第一帧可能读成绿灯，让"绿灯起步"条件提前触发。
+    try:
+        light.freeze(True)
+        light.set_state(carla.TrafficLightState.Red)
+        world.tick()
+    except Exception as e:
+        app_logger.warning("预设红灯失败（继续）: %s" % e)
+
+    caps = []
+    for part in str(capture_times or "").replace("，", ",").split(","):
+        part = part.strip()
+        if part:
+            try:
+                caps.append(float(part))
+            except ValueError:
+                pass
+
+    try:
+        res = play(world, sc, duration=duration, capture_at=caps,
+                   out_dir=str(shot_dir), width=960, height=540)
+    except Exception as e:
+        app_logger.error("❌ 红绿灯演示失败: %s" % e)
+        return "❌ 红绿灯演示失败：%s: %s" % (type(e).__name__, e)
+    finally:
+        try:
+            light.freeze(False)
+        except Exception:
+            pass
+
+    return ("✅ 红绿灯相位演示完成（地图 %s，红绿灯 id=%s）\n"
+            "   红灯保持 %.1fs 后切绿，自车按 TrafficSignalCondition 起步\n\n"
+            % (map_name, light.id, red_hold)) + summarize(res)
+
+
+@mcp.tool()
+async def run_traffic_light_demo(map_name: str = "Town03",
+                                 red_hold: float = 4.0,
+                                 duration: float = 16.0,
+                                 capture_times: str = "1,3,6,10",
+                                 out_dir: str = "",
+                                 host: str = "127.0.0.1",
+                                 port: int = 2000) -> str:
+    """在真实地图上演示红绿灯相位控制（红灯停车 -> 切绿 -> 起步）。
+
+    Args:
+        map_name: 内置地图名（Town03 / Town10HD 等，需含红绿灯）
+        red_hold: 红灯保持时长（秒），到点后脚本把信号切绿
+        duration: 总时长（秒）
+        capture_times: 截图时刻，逗号分隔
+        out_dir: 截图目录
+    """
+    return await run_traffic_light_demo_impl(map_name, red_hold, duration,
+                                              capture_times, out_dir,
+                                              host, port)
 
 
 def _resolve_actor_by_id(actor_id):
@@ -6875,7 +7032,26 @@ class FastMCPGitHubAssistant:
                             "capture_times": {"type": "string", "description": "截图时刻，逗号分隔", "default": "2,5"},
                             "out_dir": {"type": "string", "description": "截图输出目录", "default": ""},
                             "host": {"type": "string", "description": "CARLA 服务地址", "default": "127.0.0.1"},
-                            "port": {"type": "integer", "description": "CARLA 端口", "default": 2000}
+                            "port": {"type": "integer", "description": "CARLA 端口", "default": 2000},
+                            "map_name": {"type": "string", "description": "用 CARLA 内置地图承载（如 Town03），填了就忽略 xodr_layout；红绿灯场景必须用内置地图", "default": ""}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_traffic_light_demo",
+                    "description": "在真实地图上演示红绿灯相位控制：红灯停车等待，到点切绿后自车起步，并按时刻截图。需要 CarlaUE4.exe 已启动。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "map_name": {"type": "string", "description": "内置地图名（Town03 / Town10HD 等，需含红绿灯）", "default": "Town03"},
+                            "red_hold": {"type": "number", "description": "红灯保持时长（秒）", "default": 4.0},
+                            "duration": {"type": "number", "description": "总时长（秒）", "default": 16.0},
+                            "capture_times": {"type": "string", "description": "截图时刻，逗号分隔", "default": "1,3,6,10"},
+                            "out_dir": {"type": "string", "description": "截图输出目录", "default": ""}
                         },
                         "required": []
                     }
@@ -7504,6 +7680,19 @@ class FastMCPGitHubAssistant:
                     xodr_layout=arguments.get("xodr_layout", "straight"),
                     duration=arguments.get("duration", 0.0),
                     capture_times=arguments.get("capture_times", "2,5"),
+                    out_dir=arguments.get("out_dir", ""),
+                    host=arguments.get("host", "127.0.0.1"),
+                    port=arguments.get("port", 2000),
+                    map_name=arguments.get("map_name", "")
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "run_traffic_light_demo":
+                result = await run_traffic_light_demo_impl(
+                    map_name=arguments.get("map_name", "Town03"),
+                    red_hold=arguments.get("red_hold", 4.0),
+                    duration=arguments.get("duration", 16.0),
+                    capture_times=arguments.get("capture_times", "1,3,6,10"),
                     out_dir=arguments.get("out_dir", ""),
                     host=arguments.get("host", "127.0.0.1"),
                     port=arguments.get("port", 2000)
@@ -8847,6 +9036,16 @@ def get_web_interface():
     <!-- ===== 周计划场景快捷按钮 ===== -->
     <div class="quick-panel">
         <div class="quick-title">⚡ 场景快捷按钮（点击直接执行，无需输入）</div>
+
+        <div class="week-group">
+            <div class="week-label"><span style="color:#e11d48;">🆕 2026-11 新增功能（OpenSCENARIO 播放器增强）</span></div>
+            <div class="quick-btns">
+                <button class="qbtn" style="background:linear-gradient(135deg,#e11d48,#be123c);" onclick="runQuickTool('run_traffic_light_demo', {map_name: 'Town03', red_hold: 4, capture_times: '1,3,6,10'}, this)">🚦 2026-11 红绿灯相位演示</button>
+                <button class="qbtn" style="background:linear-gradient(135deg,#e11d48,#be123c);" onclick="runQuickTool('run_scenario_in_carla', {template: 'signal_phase', map_name: 'Town03', capture_times: '1,4,7'}, this)">📗 2026-11 红绿灯模板（signal_phase）</button>
+                <button class="qbtn" style="background:linear-gradient(135deg,#e11d48,#be123c);" onclick="runQuickTool('run_scenario_in_carla', {template: 'lead_brake', duration: 18, capture_times: '6,12,15'}, this)">🚗 2026-11 IDM 跟驰（前车急刹）</button>
+                <button class="qbtn" style="background:linear-gradient(135deg,#e11d48,#be123c);" onclick="runQuickTool('run_scenario_in_carla', {template: 'cut_in', capture_times: '1,3,5'}, this)">↔️ 2026-11 变道（横向加速度约束）</button>
+            </div>
+        </div>
 
         <div class="week-group">
             <div class="week-label"><span class="w1">🛣️ 道路结构场景</span></div>

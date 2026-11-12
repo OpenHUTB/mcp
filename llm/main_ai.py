@@ -5943,9 +5943,100 @@ def _resolve_actor_by_id(actor_id):
 
 # ============ AI助手类（集成Deepseek AI） ============
 
+# =====================================================================
+# 本地文字意图表：输入快捷按钮上的文字，直接执行与按钮相同的操作。
+# 不依赖大模型（离线/无 API Key 也能用），匹配时取命中的最长关键词。
+# =====================================================================
+QUICK_TEXT_INTENTS = [
+    # ---- 2026-11 OpenSCENARIO 播放器增强 ----
+    {"keywords": ["红绿灯相位演示", "信号灯相位演示", "红绿灯演示", "信号灯演示"],
+     "tool": "run_traffic_light_demo",
+     "args": {"map_name": "Town03", "red_hold": 4, "capture_times": "1,3,6,10"}},
+    {"keywords": ["红绿灯模板", "信号灯模板", "红绿灯场景", "信号灯场景"],
+     "tool": "run_scenario_in_carla",
+     "args": {"template": "signal_phase", "map_name": "Town03",
+              "capture_times": "1,4,7"}},
+    {"keywords": ["idm跟驰", "idm", "前车急刹跟驰", "跟驰场景"],
+     "tool": "run_scenario_in_carla",
+     "args": {"template": "lead_brake", "duration": 18,
+              "capture_times": "6,12,15"}},
+    {"keywords": ["横向加速度", "变道约束"],
+     "tool": "run_scenario_in_carla",
+     "args": {"template": "cut_in", "capture_times": "1,3,5"}},
+    # ---- 道路结构场景 ----
+    {"keywords": ["匝道汇入"], "tool": "scenario_highway_ramp",
+     "args": {"ramp_type": "on"}},
+    {"keywords": ["匝道驶出", "驶出匝道"], "tool": "scenario_highway_ramp",
+     "args": {"ramp_type": "off"}},
+    {"keywords": ["车道合并", "车道减少"], "tool": "scenario_lane_merge",
+     "args": {}},
+    {"keywords": ["分合流路口", "分合流"], "tool": "scenario_diverge_merge",
+     "args": {}},
+    {"keywords": ["辅路", "辅道"], "tool": "scenario_side_road", "args": {}},
+    # ---- 路口与特殊形态目标 ----
+    {"keywords": ["路口+红绿灯", "路口红绿灯", "十字路口", "t型路口", "y型路口"],
+     "tool": "scenario_junction_light", "args": {}},
+    {"keywords": ["隧道", "地下道"], "tool": "scenario_tunnel", "args": {}},
+    {"keywords": ["环岛", "环形路口"], "tool": "scenario_roundabout", "args": {}},
+    {"keywords": ["儿童姿态", "儿童行人姿态"], "tool": "spawn_pedestrian_pose",
+     "args": {"pedestrian_type": "child", "pose": "walk"}},
+    {"keywords": ["二轮车姿态", "二轮车"], "tool": "scenario_two_wheeler",
+     "args": {"vehicle_type": "bicycle", "state": "move"}},
+    {"keywords": ["特殊任务车辆", "救护车", "警车"], "tool": "spawn_special_vehicle",
+     "args": {"vehicle_type": "ambulance"}},
+    # ---- 特殊群体、光照与危险行为 ----
+    {"keywords": ["交警", "轮椅"], "tool": "scenario_officer",
+     "args": {"element": "traffic_police"}},
+    {"keywords": ["弱光", "黄昏"], "tool": "set_lighting",
+     "args": {"condition": "dusk"}},
+    {"keywords": ["逆光"], "tool": "scenario_backlight", "args": {}},
+    {"keywords": ["侧翻车辆", "侧翻"], "tool": "spawn_rollover_vehicle",
+     "args": {"vehicle_type": "car", "rollover": "side"}},
+    {"keywords": ["前车急刹", "前车静止"], "tool": "scenario_lead_vehicle",
+     "args": {"mode": "brake"}},
+    {"keywords": ["危险切入", "cut-in"], "tool": "scenario_cut_in", "args": {}},
+    # ---- 复杂危险场景 ----
+    {"keywords": ["前车消失", "前车切出"], "tool": "scenario_lead_disappear",
+     "args": {}},
+    {"keywords": ["路口危险横穿", "危险横穿", "鬼探头"],
+     "tool": "scenario_crossing_hazard", "args": {"crosser": "pedestrian"}},
+    {"keywords": ["低重叠率", "低重叠"], "tool": "scenario_low_overlap",
+     "args": {}},
+    {"keywords": ["逆行"], "tool": "scenario_wrong_way", "args": {}},
+    {"keywords": ["无保护转弯", "无保护左转"], "tool": "scenario_unprotected_turn",
+     "args": {}},
+    # ---- 常用工具 ----
+    {"keywords": ["连接carla", "连接carla服务器"], "tool": "connect_carla",
+     "args": {}},
+    {"keywords": ["清理场景"], "tool": "cleanup_scene", "args": {}},
+]
+
+# OpenSCENARIO 模板的中文别名（带"模板/场景/播放"语境时才匹配）
+OSC_TEMPLATE_ALIASES = {
+    "危险切入模板": "cut_in",
+    "前车急刹模板": "lead_brake",
+    "前车急刹场景": "lead_brake",
+    "前车静止场景": "lead_stationary",
+    "横穿场景": "crossing_hazard",
+    "低重叠场景": "low_overlap",
+    "逆行场景": "wrong_way",
+    "无保护左转场景": "unprotected_turn",
+    "信号交叉口场景": "junction_light",
+    "近距跟驰": "close_follow",
+    "超车场景": "overtake",
+    "紧急避让": "evasive_swerve",
+    "红绿灯相位场景": "signal_phase",
+}
+
+OSC_TEMPLATE_NAMES = [
+    "cut_in", "lead_brake", "lead_stationary", "crossing_hazard",
+    "low_overlap", "wrong_way", "unprotected_turn", "junction_light",
+    "close_follow", "overtake", "evasive_swerve", "signal_phase",
+]
+
+
 class FastMCPGitHubAssistant:
     """FastMCP GitHub AI助手 - 集成Deepseek AI与FastMCP工具"""
-
     VEHICLE_TYPES = {
         "model3": "Tesla Model 3",
         "a2": "Audi A2",
@@ -7049,7 +7140,7 @@ class FastMCPGitHubAssistant:
                 "type": "function",
                 "function": {
                     "name": "run_scenario_in_carla",
-                    "description": "在 CARLA 里播放生成的 OpenSCENARIO(.xosc) 场景并截图。解析场景的实体与时间触发，按 StartTrigger 下发速度动作，跑固定时长取图。需要 CarlaUE4.exe 已启动。当用户要求'把这个场景跑起来'、'在CARLA里播放场景'时使用。注意：时距/距离触发、变道、跟驰不在轻量播放器范围内，会明确报告未执行。",
+                    "description": "在 CARLA 里播放生成的 OpenSCENARIO(.xosc) 场景并截图。解析场景的实体、ConditionGroup（组内 AND/组间 OR）、Condition@delay、参数声明、ManeuverGroup 多 Actor 与 StartTrigger/StopTrigger，按触发下发速度/跟驰/变道/轨迹/信号灯动作，跑固定时长取图。需要 CarlaUE4.exe 已启动。当用户要求'把这个场景跑起来'、'在CARLA里播放场景'、'播放 xxx 模板'时使用。",
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -8187,8 +8278,125 @@ class FastMCPGitHubAssistant:
 
         return "\n".join(prompt_parts)
 
+    # ------------------------------------------------------------------
+    # 本地文字意图：输入快捷按钮文案即可执行同一操作（不经过大模型）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _extract_quick_args(text, rule):
+        """在按钮默认参数基础上，从文字里补充地图/时长/截图时刻等参数。"""
+        args = dict(rule.get("args") or {})
+        tool = rule.get("tool", "")
+        if not (tool.startswith("scenario_")
+                or tool in ("run_scenario_in_carla", "run_traffic_light_demo")):
+            return args
+
+        m = re.search(r"town\s*(\d+[a-z]*)", text, re.I)
+        if m:
+            args["map_name"] = "Town" + m.group(1).upper()
+
+        if tool in ("run_scenario_in_carla", "run_traffic_light_demo"):
+            m = re.search(r"(\d+(?:\.\d+)?)\s*(?:秒|s(?![a-z]))", text, re.I)
+            if m:
+                args["duration"] = float(m.group(1))
+
+            m = re.search(r"截图[^\d]*([\d.,，]+)", text)
+            if m:
+                times = m.group(1).replace("，", ",").strip(",")
+                if times:
+                    args["capture_times"] = times
+
+            if tool == "run_traffic_light_demo":
+                m = re.search(r"红灯[^\d]*(\d+(?:\.\d+)?)", text)
+                if m:
+                    args["red_hold"] = float(m.group(1))
+        return args
+
+    def _match_quick_intent(self, message):
+        """匹配快捷按钮文案 / OpenSCENARIO 模板名，返回 {tool,args,label}。"""
+        text = (message or "").strip()
+        if not text:
+            return None
+        low = text.lower()
+
+        best = None   # (命中长度, tool, args, label)
+
+        for rule in QUICK_TEXT_INTENTS:
+            for kw in rule["keywords"]:
+                if kw.lower() in low:
+                    if best is None or len(kw) > best[0]:
+                        best = (len(kw), rule["tool"], dict(rule["args"]), kw)
+
+        # 模板英文名（如 lead_brake）直接命中
+        for name in OSC_TEMPLATE_NAMES:
+            if name in low and (best is None or len(name) > best[0]):
+                best = (len(name), "run_scenario_in_carla",
+                        {"template": name, "capture_times": "2,5"}, name)
+
+        # 中文模板别名：只有带"模板/场景/播放"语境时才走播放器
+        if any(k in text for k in ("模板", "场景", "播放", "openscenario", "xosc")):
+            for alias, tpl in OSC_TEMPLATE_ALIASES.items():
+                if alias in text and (best is None or len(alias) > best[0]):
+                    best = (len(alias), "run_scenario_in_carla",
+                            {"template": tpl, "capture_times": "2,5"}, alias)
+
+        if best is None:
+            return None
+
+        _, tool, args, label = best
+        rule = {"tool": tool, "args": args}
+        return {"tool": tool, "args": self._extract_quick_args(text, rule),
+                "label": label}
+
+    async def run_tool_direct(self, tool, arguments):
+        """不经过大模型，直接执行工具（快捷按钮与文字意图共用）。"""
+        if tool != "connect_carla":
+            healthy = False
+            if carla_client.world is not None and getattr(carla_client, "client", None) is not None:
+                try:
+                    carla_client.client.set_timeout(5)
+                    carla_client.client.get_world()
+                    healthy = True
+                except Exception:
+                    healthy = False
+            if not healthy:
+                if not await carla_client.connect("localhost", 2000):
+                    return False, ("❌ 无法连接到CARLA服务器(localhost:2000)，"
+                                   "请先启动仿真器")
+
+        tool_call = {
+            "id": "local-intent",
+            "type": "function",
+            "function": {"name": tool,
+                         "arguments": json.dumps(arguments, ensure_ascii=False)},
+        }
+        result = await self.execute_fastmcp_tool_call(tool_call)
+        if result.get("success"):
+            data = result.get("data")
+            if isinstance(data, str):
+                return True, data
+            return True, ("✅ 操作成功" if data else "❌ 操作失败")
+        return False, result.get("error", "执行失败")
+
     async def chat(self, user_message):
         """处理聊天请求 - 使用FastMCP工具的AI对话"""
+
+        # 0. 本地文字意图：与快捷按钮同一套操作，不依赖大模型
+        quick = self._match_quick_intent(user_message)
+        if quick:
+            app_logger.info("💡 命中本地文字意图: %s -> %s %s"
+                            % (quick["label"], quick["tool"], quick["args"]))
+            ok, msg = await self.run_tool_direct(quick["tool"], quick["args"])
+            return {
+                "message": self.process_markdown(msg),
+                "tool_calls": [{
+                    "id": "local-intent",
+                    "type": "function",
+                    "function": {"name": quick["tool"],
+                                 "arguments": json.dumps(quick["args"],
+                                                         ensure_ascii=False)},
+                }],
+                "conversation": [{"role": "user", "content": user_message}],
+            }
 
         # 检查是否有生成意图但缺少参数
         spawn_check = self._check_spawn_intent(user_message)
@@ -8251,6 +8459,10 @@ class FastMCPGitHubAssistant:
 - 如果用户消息中包含 "低重叠"、"压线行驶"，**必须**调用 `scenario_low_overlap` 工具。
 - 如果用户消息中包含 "逆行"，**必须**调用 `scenario_wrong_way` 工具。
 - 如果用户消息中包含 "无保护"、"无信号灯路口"，**必须**调用 `scenario_unprotected_turn` 工具。
+- 如果用户消息中包含 "IDM"、"跟驰场景"，**必须**调用 `run_scenario_in_carla`，template="lead_brake"、duration=18。
+- 如果用户消息中包含 "红绿灯相位演示"、"信号灯演示"，**必须**调用 `run_traffic_light_demo`（内置地图 Town03）。
+- 如果用户消息中包含 "红绿灯模板"、"signal_phase"，**必须**调用 `run_scenario_in_carla`，template="signal_phase"、map_name="Town03"。
+- 如果用户要"播放/运行 xxx 模板"，且 xxx 是 cut_in/lead_brake/lead_stationary/crossing_hazard/low_overlap/wrong_way/unprotected_turn/junction_light/close_follow/overtake/evasive_swerve/signal_phase 之一，调用 `run_scenario_in_carla` 并传 template。
 - 如果用户消息中包含 "连接CARLA"、"CARLA服务器"，调用 `connect_carla` 工具。
 - **绝对不要**将"路网"或"网格"理解为 CARLA 车辆生成请求。
 
@@ -8298,6 +8510,9 @@ CARLA仿真功能：
 35. scenario_low_overlap - 前方低重叠率行驶目标，参数：offset_ratio(默认0.35), map_name(可选)
 36. scenario_wrong_way - 逆行场景，参数：speed(默认8), map_name(可选)
 37. scenario_unprotected_turn - 路口无保护通行场景，参数：map_name(可选)
+38. run_scenario_in_carla - 在 CARLA 中播放 OpenSCENARIO 场景，参数：template(模板名，默认lead_brake)、xosc_path、xodr_layout、duration、capture_times、map_name(内置地图)
+   可播放模板：cut_in/lead_brake/lead_stationary/crossing_hazard/low_overlap/wrong_way/unprotected_turn/junction_light/close_follow/overtake/evasive_swerve/signal_phase
+39. run_traffic_light_demo - 红绿灯相位演示（红灯等待→切绿起步），参数：map_name(默认Town03)、red_hold、duration、capture_times
 
 
 参照物定位（重要）：
@@ -9379,35 +9594,8 @@ async def run_tool(tool: str = Form(...), args: str = Form("{}")):
     except Exception:
         arguments = {}
     try:
-        # 健康探测：客户端可能持有已失效的连接（如CARLA重启过），先验证再决定是否重连
-        if tool != "connect_carla":
-            healthy = False
-            if carla_client.world is not None and getattr(carla_client, 'client', None) is not None:
-                try:
-                    carla_client.client.set_timeout(5)
-                    carla_client.client.get_world()
-                    healthy = True
-                except Exception:
-                    healthy = False
-            if not healthy:
-                connected = await carla_client.connect('localhost', 2000)
-                if not connected:
-                    return {"success": False, "message": "❌ 无法连接到CARLA服务器(localhost:2000)，请先启动仿真器", "tool": tool}
-
-        tool_call = {
-            "id": "quick-btn",
-            "type": "function",
-            "function": {"name": tool, "arguments": json.dumps(arguments)}
-        }
-        result = await assistant.execute_fastmcp_tool_call(tool_call)
-        if result.get("success"):
-            data = result.get("data")
-            if isinstance(data, str):
-                message = data
-            else:
-                message = "✅ 操作成功" if data else "❌ 操作失败"
-            return {"success": True, "message": message, "tool": tool}
-        return {"success": False, "message": result.get("error", "执行失败"), "tool": tool}
+        ok, message = await assistant.run_tool_direct(tool, arguments)
+        return {"success": ok, "message": message, "tool": tool}
     except Exception as e:
         app_logger.error(f"❌ 快捷工具执行失败: {str(e)}")
         return {"success": False, "message": f"执行出错: {str(e)}", "tool": tool}

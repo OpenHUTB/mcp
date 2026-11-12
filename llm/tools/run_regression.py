@@ -32,6 +32,120 @@ from xosc_player import parse_xosc
 SKIP_ON_XODR = {"signal_phase"}
 
 
+# 手工构造的 OSC：覆盖条件组 AND/OR、Condition@delay、参数声明、
+# ManeuverGroup 多 Actor、Sequence 嵌套与 RelativeTargetSpeed(factor)。
+CONFORMANCE_XOSC = """<?xml version="1.0" encoding="UTF-8"?>
+<OpenSCENARIO>
+  <FileHeader revMajor="1" revMinor="1" date="2026-11-12"
+              description="player conformance" author="regression"/>
+  <ParameterDeclarations>
+    <ParameterDeclaration name="brake_target" parameterType="double" value="3.0"/>
+  </ParameterDeclarations>
+  <Entities>
+    <ScenarioObject name="ego"><Vehicle name="v1" vehicleCategory="car"/></ScenarioObject>
+    <ScenarioObject name="lead"><Vehicle name="v2" vehicleCategory="car"/></ScenarioObject>
+  </Entities>
+  <Storyboard>
+    <Init>
+      <Actions>
+        <Private entityRef="ego">
+          <PrivateAction><TeleportAction><Position>
+            <LanePosition roadId="1" laneId="-1" s="10" offset="0"/>
+          </Position></TeleportAction></PrivateAction>
+          <PrivateAction><LongitudinalAction><SpeedAction>
+            <SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time"/>
+            <SpeedActionTarget><AbsoluteTargetSpeed value="10"/></SpeedActionTarget>
+          </SpeedAction></LongitudinalAction></PrivateAction>
+        </Private>
+        <Private entityRef="lead">
+          <PrivateAction><TeleportAction><Position>
+            <LanePosition roadId="1" laneId="-1" s="40" offset="0"/>
+          </Position></TeleportAction></PrivateAction>
+          <PrivateAction><LongitudinalAction><SpeedAction>
+            <SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time"/>
+            <SpeedActionTarget><AbsoluteTargetSpeed value="8"/></SpeedActionTarget>
+          </SpeedAction></LongitudinalAction></PrivateAction>
+        </Private>
+      </Actions>
+    </Init>
+    <Story name="story"><Act name="act"><Sequence name="seq" numberOfExecutions="1">
+      <ManeuverGroup name="mg" maximumExecutionCount="1">
+        <Actors selectTriggeringEntities="false">
+          <EntityRef entityRef="ego"/>
+          <EntityRef entityRef="lead"/>
+        </Actors>
+        <Maneuver name="m">
+          <Event name="follow_lead" priority="overwrite">
+            <Action><PrivateAction><LongitudinalAction><SpeedAction>
+              <SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time"/>
+              <SpeedActionTarget>
+                <RelativeTargetSpeed entityRef="lead" value="1.2"
+                                     speedTargetValueType="factor"/>
+              </SpeedActionTarget>
+            </SpeedAction></LongitudinalAction></PrivateAction></Action>
+            <StartTrigger>
+              <ConditionGroup>
+                <Condition name="c_speed" delay="2" conditionEdge="rising">
+                  <ByEntityCondition>
+                    <TriggeringEntities triggeringEntitiesRule="any">
+                      <EntityRef entityRef="lead"/>
+                    </TriggeringEntities>
+                    <EntityCondition>
+                      <SpeedCondition value="5" rule="lessThan" entityRef="lead"/>
+                    </EntityCondition>
+                  </ByEntityCondition>
+                </Condition>
+                <Condition name="c_still" conditionEdge="rising">
+                  <ByEntityCondition>
+                    <TriggeringEntities triggeringEntitiesRule="any">
+                      <EntityRef entityRef="lead"/>
+                    </TriggeringEntities>
+                    <EntityCondition><StandStillCondition duration="1.5"/></EntityCondition>
+                  </ByEntityCondition>
+                </Condition>
+              </ConditionGroup>
+              <ConditionGroup>
+                <Condition name="c_traveled" conditionEdge="rising">
+                  <ByEntityCondition>
+                    <TriggeringEntities triggeringEntitiesRule="any">
+                      <EntityRef entityRef="ego"/>
+                    </TriggeringEntities>
+                    <EntityCondition><TraveledDistanceCondition value="20"/></EntityCondition>
+                  </ByEntityCondition>
+                </Condition>
+              </ConditionGroup>
+            </StartTrigger>
+          </Event>
+          <Event name="slow_down" priority="overwrite">
+            <Action><PrivateAction><LongitudinalAction><SpeedAction>
+              <SpeedActionDynamics dynamicsShape="step" value="0" dynamicsDimension="time"/>
+              <SpeedActionTarget>
+                <AbsoluteTargetSpeed value="$brake_target"/>
+              </SpeedActionTarget>
+            </SpeedAction></LongitudinalAction></PrivateAction></Action>
+            <StartTrigger>
+              <ConditionGroup>
+                <Condition name="c_time" conditionEdge="rising">
+                  <ByValueCondition><SimulationTimeCondition value="6" rule="greaterThan"/></ByValueCondition>
+                </Condition>
+              </ConditionGroup>
+            </StartTrigger>
+          </Event>
+        </Maneuver>
+      </ManeuverGroup>
+    </Sequence></Act></Story>
+    <StopTrigger>
+      <ConditionGroup>
+        <Condition name="stop" conditionEdge="rising">
+          <ByValueCondition><SimulationTimeCondition value="20" rule="greaterThan"/></ByValueCondition>
+        </Condition>
+      </ConditionGroup>
+    </StopTrigger>
+  </Storyboard>
+</OpenSCENARIO>
+"""
+
+
 def _synthetic_spec() -> ScenarioSpec:
     """覆盖全部新增条件的合成场景，确保新功能不回退。"""
     entities = [
@@ -127,6 +241,57 @@ def offline_checks(out_dir: str) -> int:
             print("✅ %-18s 信号灯条件 + 信号灯动作均可解析" % "signal_phase")
     except Exception as e:
         print("❌ signal_phase 异常 %s: %s" % (type(e).__name__, e))
+        failures += 1
+
+    # OSC 语义一致性（参照 esmini）：条件组 AND/OR、delay、参数、多 Actor、相对速度
+    try:
+        path = os.path.join(out_dir, "conformance.xosc")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(CONFORMANCE_XOSC)
+        sc = parse_xosc(path)
+        problems = []
+        evs = {e.name: e for e in sc.events}
+        expect_names = {"follow_lead[ego]", "follow_lead[lead]",
+                        "slow_down[ego]", "slow_down[lead]"}
+        if set(evs) != expect_names:
+            problems.append("多 Actor 未展开: %s" % sorted(evs))
+
+        fl = evs.get("follow_lead[ego]")
+        if fl is None:
+            problems.append("缺少 follow_lead[ego]")
+        else:
+            if fl.trigger.kind != "any" or len(fl.trigger.children) != 2:
+                problems.append("ConditionGroup 未按 OR 组合: kind=%s groups=%d"
+                                % (fl.trigger.kind, len(fl.trigger.children)))
+            leaves = fl.trigger.leaves()
+            kinds = {c.kind for c in leaves}
+            if kinds != {"speed", "standstill", "traveled_distance"}:
+                problems.append("组内 AND 叶子异常: %s" % sorted(kinds))
+            sp = next((c for c in leaves if c.kind == "speed"), None)
+            if sp is None or abs(sp.delay - 2.0) > 1e-6:
+                problems.append("Condition@delay 未解析")
+            if sp is None or sp.triggering_entity != "lead":
+                problems.append("TriggeringEntities 未生效")
+            if not fl.actions or fl.actions[0].relative_mode != "factor":
+                problems.append("RelativeTargetSpeed factor 未识别")
+
+        sd = evs.get("slow_down[ego]")
+        if sd is None or not sd.actions or abs(sd.actions[0].value - 3.0) > 1e-6:
+            problems.append("参数声明 $brake_target 未替换")
+        if abs(sc.stop_time - 20.0) > 1e-6:
+            problems.append("StopTrigger 时间异常: %.1f" % sc.stop_time)
+        if sc.unsupported:
+            problems.append("有未执行项: %s" % sc.unsupported[:2])
+
+        if problems:
+            print("❌ %-18s %s" % ("conformance", "；".join(problems)))
+            failures += 1
+        else:
+            print("✅ %-18s 条件组 AND/OR、delay、参数、多 Actor、相对速度全部生效"
+                  % "conformance")
+    except Exception as e:
+        print("❌ %-18s 异常 %s: %s" % ("conformance", type(e).__name__, e))
+        traceback.print_exc()
         failures += 1
 
     return failures

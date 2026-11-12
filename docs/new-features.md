@@ -108,16 +108,16 @@ s^* &= s_0 + \max\left(0, vT + \frac{v\Delta v}{2\sqrt{a_{\max}\,b}}\right)
 \end{aligned}
 $$
 
-其中 $a_{\max}=2.0\,\mathrm{m/s^2}$、$b=3.0\,\mathrm{m/s^2}$、$T=1.2\,\mathrm{s}$，
-$s_0$ 取动作里的跟驰距离（`LongitudinalDistanceAction.distance`，上限 40m），
+其中 \(a_{\max}=2.0\,\mathrm{m/s^2}\)、\(b=3.0\,\mathrm{m/s^2}\)、\(T=1.2\,\mathrm{s}\)，
+\(s_0\) 取动作里的跟驰距离（`LongitudinalDistanceAction.distance`，上限 40m），
 油门/刹车由期望加速度映射得到。前车急刹时自车先强减速，最终稳定在给定间距上：
 `lead_brake` 的 `distance=15 m`，自车停在约 20 m 中心距（15 m 净距），后车同样按 IDM 跟驰：
 
 ![IDM 跟驰：前车急刹](https://openhutb.github.io/mcp/img/idm_follow.png)
 <div align="center"><i>lead_brake t=15.0 s：前车已停，自车与后车都保持各自跟驰间距</i></div>
 
-变道时按 $a_y = v^2 \kappa \le 3\,\mathrm{m/s^2}$ 对转向做限幅
-（$\kappa \approx 0.12 \cdot \mathrm{steer}$），高速下的切入不再出现"瞬间横甩"：
+变道时按 \(a_y = v^2 \kappa \le 3\,\mathrm{m/s^2}\) 对转向做限幅
+（\(\kappa \approx 0.12 \cdot \mathrm{steer}\)），高速下的切入不再出现"瞬间横甩"：
 
 ![变道：横向加速度限幅](https://openhutb.github.io/mcp/img/lane_change.png)
 

@@ -149,7 +149,7 @@
 </tr>
 <tr>
 <td>场景模板编译与校验</td>
-<td><strong>8/8 通过</strong>，同 seed 指纹一致</td>
+<td><strong>12/12 通过</strong>，同 seed 指纹一致</td>
 </tr>
 <tr>
 <td>批量生成 50 个</td>
@@ -184,7 +184,7 @@
 </tr>
 <tr>
 <td>场景播放</td>
-<td><strong>11/11</strong> 模板跑通，未支持项 0</td>
+<td><strong>12/12</strong> 模板跑通，未支持项 0</td>
 </tr>
 </tbody>
 </table>
@@ -264,18 +264,30 @@
 <tbody>
 <tr>
 <td>条件</td>
-<td><code>CollisionCondition</code>、<code>TimeToCollisionCondition</code>、<code>RelativeSpeedCondition</code>、<code>AccelerationCondition</code>、<code>OffroadCondition</code>、<code>EndOfRoadCondition</code></td>
-</tr>
-<tr>
-<td>动作</td>
-<td><code>FollowTrajectoryAction</code></td>
+<td><code>ParameterCondition</code>、<code>TimeOfDayCondition</code>、<code>UserDefinedValueCondition</code></td>
 </tr>
 <tr>
 <td>结构</td>
-<td><code>Story</code> 分支、<code>Catalog</code>、<code>TrafficSignalControllerAction</code></td>
+<td><code>Story</code> 分支、<code>Catalog</code>、<code>EntitySelection</code>、运行期 <code>ParameterAssignment</code></td>
+</tr>
+<tr>
+<td>动作</td>
+<td>绝对目标车道（<code>AbsoluteLaneChange</code>）</td>
 </tr>
 </tbody>
 </table>
+<p>已支持的条件组语义：<code>ConditionGroup</code> 之间 OR、组内 AND，支持 <code>Condition</code> 的 <code>delay</code>；
+<code>Story/Act/Sequence</code> 全层级与一个 <code>ManeuverGroup</code> 多个 Actor 均已覆盖；
+<code>StopTrigger</code> 与 <code>StartTrigger</code> 同一套语义，满足即提前结束。</p>
+<p>已支持的条件（共 16 种）：<code>SimulationTimeCondition</code>、<code>TimeHeadwayCondition</code>、
+<code>DistanceCondition</code>、<code>SpeedCondition</code>、<code>StandStillCondition</code>、
+<code>ReachPositionCondition</code>、<code>CollisionCondition</code>、<code>TimeToCollisionCondition</code>、
+<code>RelativeSpeedCondition</code>、<code>AccelerationCondition</code>、<code>OffroadCondition</code>、
+<code>EndOfRoadCondition</code>、<code>TraveledDistanceCondition</code>、<code>RelativeDistanceCondition</code>、
+<code>RelativeAngleCondition</code>（需 OSC 1.3，导出时自动抬版本）、<code>TrafficSignalCondition</code>。</p>
+<p>已支持的动作：<code>SpeedAction</code>、<code>LongitudinalDistanceAction</code>（IDM 跟驰）、
+<code>LaneChangeAction</code>（含横向加速度限幅）、<code>LaneOffsetAction</code>、
+<code>FollowTrajectoryAction</code>、<code>TrafficSignalControllerAction</code>。</p>
 <p>即便支持的部分也有简化：</p>
 <table>
 <thead>
@@ -287,19 +299,23 @@
 <tbody>
 <tr>
 <td>跟驰</td>
-<td>用 P 控制，未实现 OSC 完整的时距控制与加速度限制</td>
+<td>用 IDM（智能驾驶员模型），日常参数取舒适型标定；动作里的 <code>maxAcceleration</code> / <code>maxDeceleration</code> 会覆盖 <script type="math/tex">a_{\max}</script> / <script type="math/tex">b</script>，但仍未实现 OSC 完整的时距语义</td>
 </tr>
 <tr>
 <td>变道</td>
-<td>用纯追踪，未做横向加速度约束</td>
+<td>用纯追踪 + 横向加速度 3 m/s² 限幅，未做完整车辆动力学</td>
 </tr>
 <tr>
 <td>速度动力学</td>
-<td><code>linear</code> 近似为分帧线性插值</td>
+<td>支持 <code>step</code> / <code>linear</code> / <code>cubic</code> / <code>sinusoidal</code> 与 <code>rate</code> 维度，按帧离散插值</td>
 </tr>
 <tr>
 <td>位置语义</td>
 <td><code>freespace</code> / <code>alongroute</code> 未实现，一律按直线距离</td>
+</tr>
+<tr>
+<td>信号灯</td>
+<td>按"自车前方最近红绿灯"的真实状态判定，忽略控制器内部的相位时长模型</td>
 </tr>
 </tbody>
 </table>

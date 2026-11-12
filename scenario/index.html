@@ -65,9 +65,13 @@
 </li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="#3-11-个场景模板">3. 11 个场景模板</a>
+<li class="toctree-l2"><a class="reference internal" href="#3-12-个场景模板">3. 12 个场景模板</a>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#4-对话示例">4. 对话示例</a>
+<ul>
+<li class="toctree-l3"><a class="reference internal" href="#41-文字直达场景">4.1 文字直达场景</a>
+</li>
+</ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#5-代码示例">5. 代码示例</a>
 <ul>
@@ -209,7 +213,7 @@
 </tr>
 </tbody>
 </table>
-<h2 id="3-11-个场景模板">3. 11 个场景模板</h2>
+<h2 id="3-12-个场景模板">3. 12 个场景模板</h2>
 <table>
 <thead>
 <tr>
@@ -224,7 +228,7 @@
 <td><code>lead_brake</code></td>
 <td>前车急刹</td>
 <td>3</td>
-<td>时间、时距、静止</td>
+<td>时间</td>
 </tr>
 <tr>
 <td><code>lead_stationary</code></td>
@@ -286,6 +290,12 @@
 <td>3</td>
 <td>时间</td>
 </tr>
+<tr>
+<td><code>signal_phase</code></td>
+<td>红绿灯相位（红灯等待→切绿→起步）</td>
+<td>2</td>
+<td>信号灯、时间</td>
+</tr>
 </tbody>
 </table>
 <h2 id="4-对话示例">4. 对话示例</h2>
@@ -294,6 +304,18 @@
 生成 20 个前车急刹的场景，每个参数在合理范围内随机
 校验刚才生成的场景文件
 </code></pre></div>
+<h3 id="41-文字直达场景">4.1 文字直达场景</h3>
+<p>网页聊天框输入与快捷按钮相同的文字，会先命中<strong>本地意图表</strong>，直接执行对应工具，
+不经过大模型（离线、无 API Key 也能用）：</p>
+<div class="highlight"><pre><span></span><code>IDM 跟驰                    -&gt; run_scenario_in_carla(template="lead_brake", duration=18)
+红绿灯相位演示              -&gt; run_traffic_light_demo(map_name="Town03")
+红绿灯模板                  -&gt; run_scenario_in_carla(template="signal_phase", map_name="Town03")
+播放 lead_brake 模板        -&gt; run_scenario_in_carla(template="lead_brake")
+在 Town04 跑匝道汇入        -&gt; scenario_highway_ramp(ramp_type="on", map_name="Town04")
+</code></pre></div>
+<p>还可以顺带指定截图时刻、时长与红灯时长：<code>IDM 跟驰，截图 6,12,15</code>、
+<code>红绿灯相位演示，红灯 8 秒</code>。模板名与按钮文字的完整对照见
+<a href="../new-features/#7-%E6%96%87%E5%AD%97%E7%9B%B4%E8%BE%BE%E5%9C%BA%E6%99%AF%E6%97%A0%E9%9C%80%E5%A4%A7%E6%A8%A1%E5%9E%8B">New Features 第 7 节</a>。</p>
 <h2 id="5-代码示例">5. 代码示例</h2>
 <h3 id="51-批量生成">5.1 批量生成</h3>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">scenario_templates</span> <span class="kn">import</span> <span class="n">build</span>

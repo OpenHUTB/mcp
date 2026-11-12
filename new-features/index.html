@@ -43,9 +43,31 @@
 <ul class="current">
 <li class="toctree-l1 current"><a class="reference internal current" href="#">New Features</a>
 <ul class="current">
-<li class="toctree-l2"><a class="reference internal" href="#2026-10--openscenario-轨迹跟随">2026-10 · OpenSCENARIO 轨迹跟随</a>
+<li class="toctree-l2"><a class="reference internal" href="#2026-11--openscenario-播放器增强位置解析--新条件--红绿灯--跟驰变道">2026-11 · OpenSCENARIO 播放器增强：位置解析 / 新条件 / 红绿灯 / 跟驰变道</a>
 <ul>
 <li class="toctree-l3"><a class="reference internal" href="#能力">能力</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#1-laneposition-解析修复">1. LanePosition 解析修复</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#2-新增-6-类触发条件">2. 新增 6 类触发条件</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#3-红绿灯相位控制">3. 红绿灯相位控制</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#4-idm-跟驰与横向加速度约束">4. IDM 跟驰与横向加速度约束</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#5-一键回归脚本与网页快捷按钮">5. 一键回归脚本与网页快捷按钮</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#6-播放器语义对齐参照-esmini">6. 播放器语义对齐（参照 esmini）</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#7-文字直达场景无需大模型">7. 文字直达场景（无需大模型）</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#8-停止触发速度曲线与跟驰限幅">8. 停止触发、速度曲线与跟驰限幅</a>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#2026-10--openscenario-轨迹跟随">2026-10 · OpenSCENARIO 轨迹跟随</a>
+<ul>
+<li class="toctree-l3"><a class="reference internal" href="#能力_1">能力</a>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#之前的状态">之前的状态</a>
 </li>
@@ -61,7 +83,7 @@
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#2026-10--openscenario-相对速度--碰撞--ttc">2026-10 · OpenSCENARIO 相对速度 / 碰撞 / TTC</a>
 <ul>
-<li class="toctree-l3"><a class="reference internal" href="#能力_1">能力</a>
+<li class="toctree-l3"><a class="reference internal" href="#能力_2">能力</a>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#用法_1">用法</a>
 </li>
@@ -135,8 +157,290 @@
 <p>按时间倒序记录新增功能。每个功能都给出：<strong>能力说明、调用方式、示例、效果</strong>。</p>
 <p>图片全部使用绝对链接。</p>
 <hr/>
-<h2 id="2026-10--openscenario-轨迹跟随">2026-10 · OpenSCENARIO 轨迹跟随</h2>
+<h2 id="2026-11--openscenario-播放器增强位置解析--新条件--红绿灯--跟驰变道">2026-11 · OpenSCENARIO 播放器增强：位置解析 / 新条件 / 红绿灯 / 跟驰变道</h2>
+<p>这一版补齐了播放器（<code>llm/src/xosc_player.py</code>）长期缺失的能力，并新增了
+<code>signal_phase</code> 模板、一键回归脚本、网页快捷按钮和文字直达入口。</p>
 <h3 id="能力">能力</h3>
+<ul>
+<li><code>LanePosition</code> 按 <code>roadId / laneId / s / offset</code> 正确解析（修复旧 bug）</li>
+<li>新增 6 类触发条件：加速度、驶出路网、路段末端、累计里程、相对距离、相对角度</li>
+<li>新增信号灯条件 <code>TrafficSignalCondition</code> 与动作 <code>TrafficSignalControllerAction</code></li>
+<li>跟驰改为 <strong>IDM</strong>（智能驾驶员模型），变道加 <strong>横向加速度 3 m/s² 限幅</strong></li>
+<li>条件求值改按 <code>TriggeringEntities</code> 选定主体（修复后车跟驰永不触发、直冲追尾）</li>
+<li>新增 <code>run_traffic_light_demo</code> 工具与 <code>signal_phase</code> 模板（模板总数 11 → 12）</li>
+<li>播放器按 esmini 语义解析 <code>ConditionGroup</code>（组内 AND / 组间 OR）、<code>Condition</code> 的 <code>delay</code>、
+  参数声明、<code>Story/Act/Sequence</code> 与多 <code>Actor</code>、<code>RelativeTargetSpeed</code></li>
+<li><code>StopTrigger</code> 与 <code>StartTrigger</code> 同语义，满足即提前结束；速度曲线新增
+  <code>cubic</code> / <code>sinusoidal</code> 与 <code>rate</code> 维度，跟驰支持 <code>maxAcceleration</code> / <code>maxDeceleration</code></li>
+<li>网页支持<strong>文字直达</strong>：在对话框输入快捷按钮同名文字即可执行同一场景，本地匹配、不依赖大模型</li>
+<li>新增一键回归脚本 <code>llm/tools/run_regression.py</code></li>
+</ul>
+<h3 id="1-laneposition-解析修复">1. <code>LanePosition</code> 解析修复</h3>
+<p><strong>之前的问题</strong>：播放器把 <code>s</code> 和 <code>offset</code> 当成世界坐标 <code>x / y</code>，去最近路点里找，
+只要场景不是沿 x 轴铺的，车就会布到错误位置（甚至路外）。</p>
+<p><strong>现在</strong>：先用 CARLA 的 <code>get_waypoint_xodr(roadId, laneId, s)</code> 精确解析，
+再按 OSC 约定沿车道左法向叠加 <code>offset</code>；解析失败才退化为"同车道里 s 最近"。
+同时 <code>run_scenario_in_carla</code> 增加了 <code>map_name</code> 参数，可以直接把场景放到
+<code>Town03</code> 等内置地图上（内置地图才有真实的红绿灯）。</p>
+<div class="highlight"><pre><span></span><code>run_scenario_in_carla(template="signal_phase", map_name="Town03")
+</code></pre></div>
+<h3 id="2-新增-6-类触发条件">2. 新增 6 类触发条件</h3>
+<table>
+<thead>
+<tr>
+<th>条件</th>
+<th>语义</th>
+<th>实现</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>AccelerationCondition</code></td>
+<td>自身加速度过阈值</td>
+<td><code>get_acceleration()</code> 模长</td>
+</tr>
+<tr>
+<td><code>OffroadCondition</code></td>
+<td>连续驶出路网</td>
+<td>非道路路点判定 + 持续计时</td>
+</tr>
+<tr>
+<td><code>EndOfRoadCondition</code></td>
+<td>到达路段末端</td>
+<td>沿车道向前探测剩余距离</td>
+</tr>
+<tr>
+<td><code>TraveledDistanceCondition</code></td>
+<td>累计里程</td>
+<td>逐帧累计位移</td>
+</tr>
+<tr>
+<td><code>RelativeDistanceCondition</code></td>
+<td>与参照实体距离</td>
+<td>实体间直线距离</td>
+</tr>
+<tr>
+<td><code>RelativeAngleCondition</code></td>
+<td>与参照实体航向夹角</td>
+<td>航向差（自动抬到 OSC 1.3 导出）</td>
+</tr>
+</tbody>
+</table>
+<p>生成侧同步支持：<code>scenario_ir</code> 增加对应 <code>TriggerKind</code>，<code>osc_builder</code> 负责
+编译成标准 XML，回读播放器时 <code>unsupported</code> 仍为 0。</p>
+<div class="highlight"><pre><span></span><code><span class="n">TriggerSpec</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="n">TriggerKind</span><span class="o">.</span><span class="n">RELATIVE_DISTANCE</span><span class="p">,</span> <span class="n">entity_ref</span><span class="o">=</span><span class="s2">"lead"</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="mf">15.0</span><span class="p">)</span>
+<span class="n">TriggerSpec</span><span class="p">(</span><span class="n">kind</span><span class="o">=</span><span class="n">TriggerKind</span><span class="o">.</span><span class="n">TRAVELED_DISTANCE</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="mf">30.0</span><span class="p">)</span>
+</code></pre></div>
+<h3 id="3-红绿灯相位控制">3. 红绿灯相位控制</h3>
+<ul>
+<li>条件：取<strong>自车前方最近的一盏红绿灯</strong>的实际状态，与目标相位比较
+  （支持 <code>Red / 红 / 红灯</code> 等别名）</li>
+<li>动作：冻结信号灯并切换到指定相位（<code>green / yellow / red / off</code>）</li>
+</ul>
+<p>新增工具 <code>run_traffic_light_demo</code>：在地图里挑一盏灯，沿来车方向后退 35m
+布设自车，先冻结为红灯，到点切绿，自车按绿灯条件起步。</p>
+<div class="highlight"><pre><span></span><code>run_traffic_light_demo(map_name="Town03", red_hold=4, capture_times="1,3,7,12")
+</code></pre></div>
+<p>实测输出（Town03）：</p>
+<div class="highlight"><pre><span></span><code>t=0.05s  force_red   traffic_light
+t=0.05s  hold_red    speed=0.00
+t=4.05s  force_green traffic_light
+t=4.10s  go_green    speed=8.00
+</code></pre></div>
+<p>红灯期间自车停在停止线前，切绿后通过路口：</p>
+<p><img alt="红绿灯：红灯停车" src="https://openhutb.github.io/mcp/img/traffic_light_red.png"/></p>
+<p><img alt="红绿灯：绿灯通过" src="https://openhutb.github.io/mcp/img/traffic_light_green.png"/></p>
+<p>模板 <code>signal_phase</code> 则把同一套逻辑放进可复现的 <code>.xosc</code>，可直接在内置地图上跑：</p>
+<div class="highlight"><pre><span></span><code>run_scenario_in_carla(template="signal_phase", map_name="Town03")
+</code></pre></div>
+<p><img alt="信号灯模板：等待" src="https://openhutb.github.io/mcp/img/signal_phase_red.png"/></p>
+<p><img alt="信号灯模板：起步" src="https://openhutb.github.io/mcp/img/signal_phase_green.png"/></p>
+<h3 id="4-idm-跟驰与横向加速度约束">4. IDM 跟驰与横向加速度约束</h3>
+<p>跟驰从 P 控制换成 IDM：</p>
+<p>
+<script type="math/tex; mode=display">
+\begin{aligned}
+a &= a_{\max} \left[1 - \left(\frac{v}{v_0}\right)^4 - \left(\frac{s^*}{\mathrm{gap}}\right)^2\right] \\
+s^* &= s_0 + \max\left(0, vT + \frac{v\Delta v}{2\sqrt{a_{\max}\,b}}\right)
+\end{aligned}
+</script>
+</p>
+<p>其中 <script type="math/tex">a_{\max}=2.0\,\mathrm{m/s^2}</script>、<script type="math/tex">b=3.0\,\mathrm{m/s^2}</script>、<script type="math/tex">T=1.2\,\mathrm{s}</script>，
+<script type="math/tex">s_0</script> 取动作里的跟驰距离（<code>LongitudinalDistanceAction.distance</code>，上限 40m），
+油门/刹车由期望加速度映射得到。前车急刹时自车先强减速，最终稳定在给定间距上：
+<code>lead_brake</code> 的 <code>distance=15 m</code>，自车停在约 20 m 中心距（15 m 净距），后车同样按 IDM 跟驰：</p>
+<p><img alt="IDM 跟驰：前车急刹" src="https://openhutb.github.io/mcp/img/idm_follow.png"/></p>
+<div align="center"><i>lead_brake t=15.0 s：前车已停，自车与后车都保持各自跟驰间距</i></div>
+<p>变道时按 <script type="math/tex">a_y = v^2 \kappa \le 3\,\mathrm{m/s^2}</script> 对转向做限幅
+（<script type="math/tex">\kappa \approx 0.12 \cdot \mathrm{steer}</script>），高速下的切入不再出现"瞬间横甩"：</p>
+<p><img alt="变道：横向加速度限幅" src="https://openhutb.github.io/mcp/img/lane_change.png"/></p>
+<h3 id="5-一键回归脚本与网页快捷按钮">5. 一键回归脚本与网页快捷按钮</h3>
+<p><code>llm/tools/run_regression.py</code> 默认做离线回归（12 个模板 + 新增条件合成场景），
+加 <code>--carla</code> 直接连 CARLA 实跑：</p>
+<div class="highlight"><pre><span></span><code>python llm/tools/run_regression.py
+python llm/tools/run_regression.py --carla --duration 5
+</code></pre></div>
+<p>实测：离线 <strong>12/12</strong> 模板结构校验通过、<code>unsupported=0</code>；CARLA 实跑
+11 个依赖自建路网的模板全部布景成功、无错误（<code>signal_phase</code> 需内置地图，
+由 <code>run_traffic_light_demo</code> 覆盖）。</p>
+<p>网页端 <code>http://127.0.0.1:3000/</code> 的"场景快捷按钮"面板顶部新增了
+<strong>2026-11 新增功能</strong> 分组，四个按钮分别对应红绿灯演示、红绿灯模板、
+IDM 跟驰与变道限幅，点击即可执行并回显截图路径。
+面板上的按钮也可以改用文字触发（见第 7 节）。</p>
+<h3 id="6-播放器语义对齐参照-esmini">6. 播放器语义对齐（参照 esmini）</h3>
+<p>此前播放器只取每个事件里的<strong>第一条</strong>条件，<code>ConditionGroup</code> 的 AND/OR 语义、
+<code>delay</code>、参数声明都被忽略。这一版按
+<a href="https://github.com/esmini/esmini">esmini</a> 的求值方式补齐：</p>
+<table>
+<thead>
+<tr>
+<th>OSC 结构</th>
+<th>现在的行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>多个 <code>ConditionGroup</code></td>
+<td>组之间 OR</td>
+</tr>
+<tr>
+<td>组内多个 <code>Condition</code></td>
+<td>AND；每个叶子独立做 <code>conditionEdge</code> 判边沿</td>
+</tr>
+<tr>
+<td><code>Condition</code> 的 <code>delay</code> 属性</td>
+<td>条件需连续成立 N 秒才触发</td>
+</tr>
+<tr>
+<td><code>ParameterDeclarations</code></td>
+<td><code>$name</code> / <code>${name}</code> 在解析前静态替换</td>
+</tr>
+<tr>
+<td><code>Story / Act / Sequence</code></td>
+<td>全层级遍历（之前只认 <code>Story/Act/ManeuverGroup</code>）</td>
+</tr>
+<tr>
+<td>一个 <code>ManeuverGroup</code> 多个 <code>Actor</code></td>
+<td>每个 Actor 各展开一份事件</td>
+</tr>
+<tr>
+<td><code>RelativeTargetSpeed</code></td>
+<td>支持 <code>delta</code>（参照速度 + 值）与 <code>factor</code>（参照速度 × 值）</td>
+</tr>
+</tbody>
+</table>
+<p>回归脚本新增 <code>conformance</code> 用例：构造含 2 个 ConditionGroup、<code>delay=2</code>、
+<code>$brake_target</code> 参数、Sequence 嵌套、双 Actor 与 <code>RelativeTargetSpeed factor</code>
+的 <code>.xosc</code>，逐项断言解析结果：</p>
+<div class="highlight"><pre><span></span><code>✅ conformance  条件组 AND/OR、delay、参数、多 Actor、相对速度全部生效
+</code></pre></div>
+<h3 id="7-文字直达场景无需大模型">7. 文字直达场景（无需大模型）</h3>
+<p>在网页聊天框输入快捷按钮上的文字，会先命中本地意图表，直接调用同一个工具并
+回显截图路径。匹配与执行都在本机完成，不依赖 DeepSeek API Key 或网络。</p>
+<table>
+<thead>
+<tr>
+<th>输入文字</th>
+<th>执行的操作</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>IDM 跟驰</code> / <code>前车急刹跟驰</code> / <code>跟驰场景</code></td>
+<td><code>run_scenario_in_carla(template="lead_brake", duration=18)</code></td>
+</tr>
+<tr>
+<td><code>红绿灯相位演示</code> / <code>信号灯演示</code></td>
+<td><code>run_traffic_light_demo(map_name="Town03")</code></td>
+</tr>
+<tr>
+<td><code>红绿灯模板</code> / <code>红绿灯场景</code></td>
+<td><code>run_scenario_in_carla(template="signal_phase", map_name="Town03")</code></td>
+</tr>
+<tr>
+<td><code>横向加速度</code> / <code>变道约束</code></td>
+<td><code>run_scenario_in_carla(template="cut_in")</code></td>
+</tr>
+<tr>
+<td><code>播放 lead_brake 模板</code></td>
+<td>按模板英文名直接播放</td>
+</tr>
+<tr>
+<td><code>隧道</code> / <code>环岛</code> / <code>匝道汇入</code> / <code>无保护转弯</code> …</td>
+<td>对应的原有 <code>scenario_*</code> 工具</td>
+</tr>
+</tbody>
+</table>
+<p>文字里还能带参数（地图、时长、截图时刻、红灯时长）：</p>
+<div class="highlight"><pre><span></span><code>IDM 跟驰，截图 6,12,15
+在 Town04 跑匝道汇入
+红绿灯相位演示，红灯 8 秒
+</code></pre></div>
+<p>输入“IDM 跟驰”后的实际界面与结果：</p>
+<p><img alt="文字直达场景" src="https://openhutb.github.io/mcp/img/text_intent.png"/></p>
+<div align="center"><i>输入按钮同名文字即可执行，结果回显触发事件与截图路径</i></div>
+<h3 id="8-停止触发速度曲线与跟驰限幅">8. 停止触发、速度曲线与跟驰限幅</h3>
+<p><strong>停止触发</strong>：此前 <code>StopTrigger</code> 只认第一条 <code>SimulationTimeCondition</code>，场景只能跑满
+固定时长。现在它与 <code>StartTrigger</code> 走同一套求值逻辑——组间 OR、组内 AND、
+<code>TriggeringEntities</code> 主体、<code>conditionEdge</code> 边沿，满足即提前结束：</p>
+<table>
+<thead>
+<tr>
+<th>输入</th>
+<th>行为</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>StopTrigger</code> 含多个 <code>ConditionGroup</code></td>
+<td>任一组成立即结束</td>
+</tr>
+<tr>
+<td>组内多个 <code>Condition</code></td>
+<td>全部成立才结束</td>
+</tr>
+<tr>
+<td>条件为 <code>StandStill</code> / <code>ReachPosition</code> / <code>RelativeDistance</code> 等</td>
+<td>运行时逐帧判定</td>
+</tr>
+<tr>
+<td>无 <code>StopTrigger</code></td>
+<td>仍按 <code>duration</code> 跑满</td>
+</tr>
+</tbody>
+</table>
+<p>结果里新增 <code>ended_at</code> 与 <code>stop_reason</code>（<code>duration</code> / <code>stop_trigger</code>），摘要会显示
+“实际运行 6.40s（StopTrigger 满足，提前结束）”。</p>
+<p><strong>速度曲线</strong>：<code>SpeedActionDynamics</code> 支持 <code>step</code>、<code>linear</code>、<code>cubic</code>、<code>sinusoidal</code>，
+<code>dynamicsDimension</code> 支持 <code>time</code> 与 <code>rate</code>。设归一化进度 <script type="math/tex">u=(t-t_0)/T</script>，
+<code>rate</code> 维度的渐变时长按 <script type="math/tex">T=|v_{\mathrm{target}}-v_0|/\dot v</script> 换算：</p>
+<p>
+<script type="math/tex; mode=display">
+\begin{aligned}
+f_{\mathrm{linear}}(u) &= u \\
+f_{\mathrm{cubic}}(u) &= 3u^2-2u^3 \\
+f_{\mathrm{sinusoidal}}(u) &= \frac{1-\cos(\pi u)}{2}
+\end{aligned}
+</script>
+</p>
+<p>当前速度按 <script type="math/tex">v=v_0+(v_{\mathrm{target}}-v_0)\,f(u)</script> 逐帧更新，<code>cubic</code> 与
+<code>sinusoidal</code> 在起止两端加速度为 0，不会出现速度阶跃。</p>
+<p><strong>跟驰限幅</strong>：<code>LongitudinalDistanceAction</code> 的 <code>maxAcceleration</code> /
+<code>maxDeceleration</code> 直接作为 IDM 的 <script type="math/tex">a_{\max}</script> 与 <script type="math/tex">b</script>，输出加速度再按动作上限
+夹一次，避免急加速或刹车越界。</p>
+<p>实测：前车平滑减速、自车按 <code>cubic</code> 降速，<code>StopTrigger</code> 设为
+<code>RelativeDistanceCondition &lt; 15 m</code>，场景在 6.40 s 提前结束（原计划 12 s）：</p>
+<p><img alt="停止触发" src="https://openhutb.github.io/mcp/img/stop_trigger.png"/></p>
+<div align="center"><i>t=6.40 s：两车净距 15 m，StopTrigger 满足，场景提前结束</i></div>
+<p>回归脚本新增 <code>stop_trigger</code> 实跑用例（1 s 后刹停、静止满 1 s 结束）：
+计划 8 s，实际 2.20 s 结束；<code>conformance</code> 用例同时断言双条件组 <code>StopTrigger</code>、
+<code>cubic</code> 曲线、<code>rate</code> 维度与跟驰加减速上限的解析结果。</p>
+<div class="highlight"><pre><span></span><code>✅ stop_trigger       实际 2.20s（计划 8.0s）  stop_reason=stop_trigger
+✅ conformance        条件组 AND/OR、delay、参数、多 Actor、相对速度、StopTrigger、速度曲线与跟驰上限全部生效
+</code></pre></div>
+<hr/>
+<h2 id="2026-10--openscenario-轨迹跟随">2026-10 · OpenSCENARIO 轨迹跟随</h2>
+<h3 id="能力_1">能力</h3>
 <p>支持 OpenSCENARIO 的 <code>FollowTrajectoryAction</code>：让实体沿一条任意形状的
 折线轨迹行驶，轨迹点带时间戳，播放器按时间插值并用纯追踪控制转向。</p>
 <p>这条能力把<strong>轨迹模块</strong>和<strong>场景模块</strong>接了起来——实采或合成的轨迹现在可以直接
@@ -233,7 +537,7 @@ t=4.0  (110.9, 1.9) yaw= -1.0°   回到原车道
 <code>disable_constant_velocity()</code>。</p>
 <hr/>
 <h2 id="2026-10--openscenario-相对速度--碰撞--ttc">2026-10 · OpenSCENARIO 相对速度 / 碰撞 / TTC</h2>
-<h3 id="能力_1">能力</h3>
+<h3 id="能力_2">能力</h3>
 <table>
 <thead>
 <tr>

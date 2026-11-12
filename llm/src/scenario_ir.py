@@ -87,6 +87,7 @@ class BehaviorKind(str, enum.Enum):
     LONGITUDINAL_DISTANCE = "longitudinal_distance"  # 纵向跟驰
     LATERAL_DISTANCE = "lateral_distance"
     TELEPORT = "teleport"
+    TRAFFIC_SIGNAL = "traffic_signal"      # TrafficSignalControllerAction
 
 
 class TriggerKind(str, enum.Enum):
@@ -101,6 +102,13 @@ class TriggerKind(str, enum.Enum):
     STANDSTILL = "standstill"              # StandStillCondition
     TIME_TO_COLLISION = "time_to_collision"  # TimeToCollisionCondition
     STORYBOARD_STATE = "storyboard_state"  # StoryboardElementStateCondition
+    ACCELERATION = "acceleration"          # AccelerationCondition
+    OFFROAD = "offroad"                    # OffroadCondition
+    END_OF_ROAD = "end_of_road"            # EndOfRoadCondition
+    TRAVELED_DISTANCE = "traveled_distance"    # TraveledDistanceCondition
+    RELATIVE_DISTANCE = "relative_distance"    # RelativeDistanceCondition
+    RELATIVE_ANGLE = "relative_angle"      # RelativeAngleCondition
+    TRAFFIC_SIGNAL = "traffic_signal"      # TrafficSignalCondition
 
 
 class Rule(str, enum.Enum):
@@ -295,12 +303,18 @@ class BehaviorSpec(BaseModel):
     dynamics_dimension: DynamicsDimension = DynamicsDimension.TIME
     dynamics_value: float = 2.0
 
+    # traffic_signal（TrafficSignalControllerAction）
+    signal_controller: Optional[str] = "signal_1"
+    signal_phase: Optional[str] = None
+
     name: Optional[str] = None
 
     @model_validator(mode="after")
     def _check(self):
         if self.kind == BehaviorKind.SPEED and self.target_speed is None:
             raise ValueError("speed 行为需要 target_speed")
+        if self.kind == BehaviorKind.TRAFFIC_SIGNAL and not self.signal_phase:
+            raise ValueError("traffic_signal 行为需要 signal_phase")
         if self.kind == BehaviorKind.LANE_CHANGE:
             if self.lane_change is None:
                 raise ValueError("lane_change 行为需要 lane_change 值")
@@ -340,6 +354,10 @@ class TriggerSpec(BaseModel):
     # 触发主体（EntityTrigger 需要）
     triggering_entity: Optional[str] = None
 
+    # traffic_signal（TrafficSignalCondition）
+    signal_controller: Optional[str] = "signal_1"
+    signal_phase: Optional[str] = None
+
     name: Optional[str] = None
 
     @model_validator(mode="after")
@@ -347,12 +365,21 @@ class TriggerSpec(BaseModel):
         entity_kinds = {
             TriggerKind.TIME_HEADWAY, TriggerKind.DISTANCE, TriggerKind.RELATIVE_SPEED,
             TriggerKind.COLLISION, TriggerKind.TIME_TO_COLLISION, TriggerKind.STANDSTILL,
+            TriggerKind.ACCELERATION, TriggerKind.OFFROAD,
+            TriggerKind.END_OF_ROAD, TriggerKind.TRAVELED_DISTANCE,
+            TriggerKind.RELATIVE_DISTANCE, TriggerKind.RELATIVE_ANGLE,
         }
         if self.kind in entity_kinds and not self.triggering_entity:
             # 允许缺省，导出时用第一个实体兜底；但记录需求
             pass
         if self.kind == TriggerKind.REACH_POSITION and self.position is None:
             raise ValueError("reach_position 触发需要 position")
+        if self.kind in (TriggerKind.RELATIVE_DISTANCE,
+                         TriggerKind.RELATIVE_ANGLE) and not self.entity_ref:
+            raise ValueError("%s 触发需要 entity_ref 作为参照实体"
+                             % self.kind.value)
+        if self.kind == TriggerKind.TRAFFIC_SIGNAL and not self.signal_phase:
+            raise ValueError("traffic_signal 触发需要 signal_phase")
         return self
 
     def resolved_name(self) -> str:

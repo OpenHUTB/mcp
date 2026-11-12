@@ -28,4 +28,7 @@ typing-extensions>=4.8.0
 scenariogeneration>=0.16.0
 lxml>=5.0.0
 
+# 场景截图（xosc_player 用 cv2 把相机帧压成 PNG）
+opencv-python>=4.8.0
+
 carla==0.9.16

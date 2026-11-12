@@ -59,7 +59,8 @@ title: 实测数据与限制
 | 动作 | 绝对目标车道（`AbsoluteLaneChange`） |
 
 已支持的条件组语义：`ConditionGroup` 之间 OR、组内 AND，支持 `Condition` 的 `delay`；
-`Story/Act/Sequence` 全层级与一个 `ManeuverGroup` 多个 Actor 均已覆盖。
+`Story/Act/Sequence` 全层级与一个 `ManeuverGroup` 多个 Actor 均已覆盖；
+`StopTrigger` 与 `StartTrigger` 同一套语义，满足即提前结束。
 
 已支持的条件（共 16 种）：`SimulationTimeCondition`、`TimeHeadwayCondition`、
 `DistanceCondition`、`SpeedCondition`、`StandStillCondition`、
@@ -76,9 +77,9 @@ title: 实测数据与限制
 
 | 项目 | 简化 |
 |---|---|
-| 跟驰 | 用 IDM（智能驾驶员模型），参数取舒适型标定，未实现 OSC 完整的时距语义 |
+| 跟驰 | 用 IDM（智能驾驶员模型），日常参数取舒适型标定；动作里的 `maxAcceleration` / `maxDeceleration` 会覆盖 \(a_{\max}\) / \(b\)，但仍未实现 OSC 完整的时距语义 |
 | 变道 | 用纯追踪 + 横向加速度 3 m/s² 限幅，未做完整车辆动力学 |
-| 速度动力学 | `linear` 近似为分帧线性插值 |
+| 速度动力学 | 支持 `step` / `linear` / `cubic` / `sinusoidal` 与 `rate` 维度，按帧离散插值 |
 | 位置语义 | `freespace` / `alongroute` 未实现，一律按直线距离 |
 | 信号灯 | 按"自车前方最近红绿灯"的真实状态判定，忽略控制器内部的相位时长模型 |
 

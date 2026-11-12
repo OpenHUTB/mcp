@@ -23,6 +23,8 @@ title: New Features
 - 新增 `run_traffic_light_demo` 工具与 `signal_phase` 模板（模板总数 11 → 12）
 - 播放器按 esmini 语义解析 `ConditionGroup`（组内 AND / 组间 OR）、`Condition` 的 `delay`、
   参数声明、`Story/Act/Sequence` 与多 `Actor`、`RelativeTargetSpeed`
+- `StopTrigger` 与 `StartTrigger` 同语义，满足即提前结束；速度曲线新增
+  `cubic` / `sinusoidal` 与 `rate` 维度，跟驰支持 `maxAcceleration` / `maxDeceleration`
 - 网页支持**文字直达**：在对话框输入快捷按钮同名文字即可执行同一场景，本地匹配、不依赖大模型
 - 新增一键回归脚本 `llm/tools/run_regression.py`
 
@@ -190,6 +192,56 @@ IDM 跟驰，截图 6,12,15
 
 ![文字直达场景](https://openhutb.github.io/mcp/img/text_intent.png)
 <div align="center"><i>输入按钮同名文字即可执行，结果回显触发事件与截图路径</i></div>
+
+### 8. 停止触发、速度曲线与跟驰限幅
+
+**停止触发**：此前 `StopTrigger` 只认第一条 `SimulationTimeCondition`，场景只能跑满
+固定时长。现在它与 `StartTrigger` 走同一套求值逻辑——组间 OR、组内 AND、
+`TriggeringEntities` 主体、`conditionEdge` 边沿，满足即提前结束：
+
+| 输入 | 行为 |
+|---|---|
+| `StopTrigger` 含多个 `ConditionGroup` | 任一组成立即结束 |
+| 组内多个 `Condition` | 全部成立才结束 |
+| 条件为 `StandStill` / `ReachPosition` / `RelativeDistance` 等 | 运行时逐帧判定 |
+| 无 `StopTrigger` | 仍按 `duration` 跑满 |
+
+结果里新增 `ended_at` 与 `stop_reason`（`duration` / `stop_trigger`），摘要会显示
+“实际运行 6.40s（StopTrigger 满足，提前结束）”。
+
+**速度曲线**：`SpeedActionDynamics` 支持 `step`、`linear`、`cubic`、`sinusoidal`，
+`dynamicsDimension` 支持 `time` 与 `rate`。设归一化进度 \(u=(t-t_0)/T\)，
+`rate` 维度的渐变时长按 \(T=|v_{\mathrm{target}}-v_0|/\dot v\) 换算：
+
+$$
+\begin{aligned}
+f_{\mathrm{linear}}(u) &= u \\
+f_{\mathrm{cubic}}(u) &= 3u^2-2u^3 \\
+f_{\mathrm{sinusoidal}}(u) &= \frac{1-\cos(\pi u)}{2}
+\end{aligned}
+$$
+
+当前速度按 \(v=v_0+(v_{\mathrm{target}}-v_0)\,f(u)\) 逐帧更新，`cubic` 与
+`sinusoidal` 在起止两端加速度为 0，不会出现速度阶跃。
+
+**跟驰限幅**：`LongitudinalDistanceAction` 的 `maxAcceleration` /
+`maxDeceleration` 直接作为 IDM 的 \(a_{\max}\) 与 \(b\)，输出加速度再按动作上限
+夹一次，避免急加速或刹车越界。
+
+实测：前车平滑减速、自车按 `cubic` 降速，`StopTrigger` 设为
+`RelativeDistanceCondition < 15 m`，场景在 6.40 s 提前结束（原计划 12 s）：
+
+![停止触发](https://openhutb.github.io/mcp/img/stop_trigger.png)
+<div align="center"><i>t=6.40 s：两车净距 15 m，StopTrigger 满足，场景提前结束</i></div>
+
+回归脚本新增 `stop_trigger` 实跑用例（1 s 后刹停、静止满 1 s 结束）：
+计划 8 s，实际 2.20 s 结束；`conformance` 用例同时断言双条件组 `StopTrigger`、
+`cubic` 曲线、`rate` 维度与跟驰加减速上限的解析结果。
+
+```text
+✅ stop_trigger       实际 2.20s（计划 8.0s）  stop_reason=stop_trigger
+✅ conformance        条件组 AND/OR、delay、参数、多 Actor、相对速度、StopTrigger、速度曲线与跟驰上限全部生效
+```
 
 ---
 

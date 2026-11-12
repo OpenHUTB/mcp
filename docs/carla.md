@@ -142,6 +142,11 @@ graph LR
 - `Story / Act / Sequence` 全层级遍历；一个 `ManeuverGroup` 的多个 `Actor`
   各展开一份事件
 - `<ParameterDeclarations>` 的 `$name` / `${name}` 在解析前静态替换
+- `StopTrigger` 与 `StartTrigger` 同一套语义，满足即提前结束
+- `SpeedActionDynamics` 支持 `step` / `linear` / `cubic` / `sinusoidal`，
+  `dynamicsDimension` 支持 `time` 与 `rate`
+- `LongitudinalDistanceAction` 的 `maxAcceleration` / `maxDeceleration`
+  作为 IDM 的 \(a_{\max}\) / \(b\)，输出加速度再按上限夹一次
 
 ### 5.2 不支持
 
@@ -173,6 +178,9 @@ graph LR
    - output/shots/t02.00.png
    - output/shots/t04.00.png
 ```
+
+若场景配置了 `StopTrigger`，摘要末尾会多一行实际运行时长与结束原因，
+结果 JSON 对应 `ended_at` 与 `stop_reason`（`duration` / `stop_trigger`）两个字段。
 
 ## 7. 12 个模板的实测结果
 

@@ -3544,6 +3544,47 @@ class CarlaClient:
             app_logger.warning(f"⚠️ 更新第一人称视角出错: {e}")
 
 
+    # 各视角模式下相机与目标的期望距离区间（米）：(最小, 最大)
+    _VIEW_DISTANCE_RANGE = {
+        "third_person": (4.0, 8.0),
+        "first_person": (0.3, 2.5),
+        "overhead": (25.0, 35.0),
+    }
+
+    async def _verify_view_applied(self, view_mode, target_actor):
+        """回读相机位置，确认视角真的停在了目标附近。
+
+        某些新版 HUTB 默认启动无人机视角，会持续覆盖客户端设置的相机，
+        表现为「日志显示切换成功、画面却没变」。这里用相机与目标的实际距离
+        做一次自检，把这类版本不兼容显式暴露出来，避免静默失败。
+
+        Returns:
+            tuple[bool, str]: (是否生效, 实际距离说明)
+        """
+        expected = self._VIEW_DISTANCE_RANGE.get(view_mode)
+        if expected is None or target_actor is None:
+            return True, ""
+
+        await asyncio.sleep(0.3)
+        try:
+            if not target_actor.is_alive:
+                return True, ""
+            spec_loc = self.world.get_spectator().get_transform().location
+            actor_loc = target_actor.get_transform().location
+            distance = math.sqrt(
+                (spec_loc.x - actor_loc.x) ** 2
+                + (spec_loc.y - actor_loc.y) ** 2
+                + (spec_loc.z - actor_loc.z) ** 2
+            )
+            # 放宽区间，避免目标在自检窗口内正常移动造成误报
+            low, high = expected[0] * 0.5, expected[1] * 1.6
+            if low <= distance <= high:
+                return True, ""
+            return False, f"{distance:.1f}m"
+        except Exception as e:
+            app_logger.warning(f"⚠️ 视角自检失败: {e}")
+            return True, ""
+
     def get_all_pedestrians(self):
         """获取当前世界中所有行人列表"""
         if self.world is None:
@@ -3928,6 +3969,26 @@ class CarlaClient:
 
         else:
             result = f"❌ 未知的视角模式: {view_mode}"
+
+        # 设置完成后自检：相机若被模拟器自身的相机模式覆盖，会在这里显式报出来
+        if target_actor is not None and view_mode in self._VIEW_DISTANCE_RANGE:
+            held, detail = await self._verify_view_applied(view_mode, target_actor)
+            if not held:
+                version = ""
+                try:
+                    version = self.client.get_server_version()
+                except Exception:
+                    pass
+                app_logger.warning(
+                    f"⚠️ 视角未生效：相机与目标实际距离 {detail}，疑似模拟器版本不兼容"
+                )
+                result += (
+                    f"\n⚠️ 画面可能没有跟着切换：相机实际距目标 {detail}。"
+                    f"当前模拟器版本 {version or '未知'} 与代码不匹配 —— "
+                    "新版 HUTB 默认启动无人机视角，会覆盖外部设置的相机。"
+                    "请改用 HUTB v2.2（同步至 CARLA 0.9.16）："
+                    "https://github.com/OpenHUTB/hutb/releases/tag/v2.2"
+                )
 
         return result
 

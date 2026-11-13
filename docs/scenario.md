@@ -101,6 +101,9 @@ cut_in             3.2
 lead_brake         2.5
 ```
 
+输入会先归一化（繁体、全角、语气词、单位写法），再参与匹配；
+`decision` 取 `execute` / `choose` / `clarify`，分别表示直接执行、候选择一、追问澄清。
+
 槽位、加权与歧义判定的细节见
 [New Features](new-features.md#2026-11--自然语言场景生成)。
 

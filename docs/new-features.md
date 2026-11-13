@@ -62,7 +62,7 @@ run_scenario_in_carla(template="cut_in_then_brake", xodr_layout="wide_straight")
 此外，`unprotected_turn` 调整为真实路口（北进口至东出口），并加入对向直行车辆。
 
 ![加塞后急刹](https://openhutb.github.io/mcp/img/scenario_cut_in_then_brake.gif)
-<div align="center"><i>cut_in_then_brake：变道 → 制动 → 追尾（俯视视角，上方为前进方向）</i></div>
+<div align="center"><i>cut_in_then_brake：变道 → 制动 → 追尾（画面顶部为口语输入与命中模板）</i></div>
 
 ### 4. 解决的问题
 
@@ -82,10 +82,34 @@ run_scenario_in_carla(template="cut_in_then_brake", xodr_layout="wide_straight")
 | MCP 端到端（解析 → 执行） | 3 个实体、4 个事件全部触发 |
 | 真实路口模板 | `unprotected_turn` / `merge_turn` 已在 Town10HD_Opt 出图 |
 
-### 6. 已知限制
+### 6. 输入容错
 
-- 规则匹配不支持否定表达，例如"不要加塞"仍会命中加塞模板
-- 当前共 15 个模板，无法匹配时返回"未匹配"，不做猜测
+口语输入不只差在语义，也差在写法。本版新增统一的文本归一化层
+（`llm/src/text_norm.py`）与打分层（`llm/src/intent_router.py`）：
+
+| 情况 | 示例 | 处理方式 |
+|---|---|---|
+| 全角、繁体、语气词 | `前車突然急剎`、`麻烦帮我搞一个…` | 统一为简体，去除标点与客套话 |
+| 单位写法不一 | `60码`、`六十公里每小时` | 统一换算为 km/h |
+| 同义动作 | `一脚刹停`、`紧急制动` | 追加规范说法“急刹”后参与匹配 |
+| 拼写略有差异 | `加塞后一脚刹停` | 用最长公共片段做近似匹配 |
+| 否定表达 | `不要加塞` | 命中项被否定词过滤，返回澄清而非错误模板 |
+
+匹配结果统一给出三档处置：`decision = execute / choose / clarify`。
+置信度足够时直接执行；存在相近候选时返回候选列表供调用方点选；
+无法命中时追问一句，不再落入“其他”。
+
+同时补齐执行前校验（`llm/src/scenario_preflight.py`）：模板依赖的地图、
+参数名与参数取值范围在生成和播放前检查并给出建议。此前
+`generate_scenario_from_template` 会读取 `params_json` 却不生效，现已修正。
+
+实测：18 条口语样本（含繁体、全角、语气词、同义说法）全部命中预期模板；
+`不要加塞` 返回 `clarify`。
+
+### 7. 已知限制
+
+- 否定过滤按词面就近判断，双重否定或跨句否定仍可能误判
+- 当前共 15 个模板，无法匹配时返回“未匹配”，不做猜测
 - 未显式传参时取参数区间下界（如制动目标速度默认为 0，即刹停）
 
 ---

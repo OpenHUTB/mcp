@@ -11,7 +11,7 @@ title: 效果展示
 <div align="center"><i>cut_in（危险切入）播放 8 秒：后车跟随、切入车变道（16 帧，0.5 秒/帧）</i></div>
 
 ![加塞后急刹](https://openhutb.github.io/mcp/img/scenario_cut_in_then_brake.gif)
-<div align="center"><i>cut_in_then_brake（加塞后急刹）播放 5 秒：变道 → 急刹 → 追尾（11 帧，0.5 秒/帧）</i></div>
+<div align="center"><i>cut_in_then_brake（加塞后急刹）播放 5 秒：变道 → 急刹 → 追尾（11 帧，0.5 秒/帧；顶部为口语输入与命中模板）</i></div>
 
 ## 2. 路网布局
 

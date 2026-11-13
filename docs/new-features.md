@@ -61,8 +61,8 @@ run_scenario_in_carla(template="cut_in_then_brake", xodr_layout="wide_straight")
 
 此外，`unprotected_turn` 调整为真实路口（北进口至东出口），并加入对向直行车辆。
 
-![加塞后急刹](https://openhutb.github.io/mcp/img/scenario_cut_in_then_brake.gif)
-<div align="center"><i>cut_in_then_brake：变道 → 制动 → 追尾（画面顶部为口语输入与命中模板）</i></div>
+![加塞后急刹](../img/scenario_cut_in_then_brake.gif)
+<div align="center"><i>cut_in_then_brake：变道 → 急刹 → 追尾（画面顶部为口语输入与命中模板）</i></div>
 
 ### 4. 解决的问题
 

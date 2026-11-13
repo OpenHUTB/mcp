@@ -13,6 +13,13 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+try:
+    import intent_router
+    from text_norm import normalize as _norm_impl
+except ImportError:  # 包内导入
+    from . import intent_router  # type: ignore
+    from .text_norm import normalize as _norm_impl  # type: ignore
+
 # 每个模板的口语说法与示例。别名越具体，匹配权重越高。
 INTENTS: Dict[str, Dict[str, Any]] = {
     "cut_in": {
@@ -116,13 +123,12 @@ _REQUIRED_MAP = {
     "merge_turn": "Town10HD_Opt",
 }
 
-_PUNCT = re.compile(r"[\s，。,.!?！？、；;：:（）()\[\]【】\"'“”‘’《》<>/\\|~`@#$%^&*_+=-]+")
 _CN_NUM = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
            "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
 
 def _norm(text: str) -> str:
-    return _PUNCT.sub("", (text or "").lower())
+    return _norm_impl(text)
 
 
 def _to_num(s: str) -> Optional[float]:
@@ -142,17 +148,6 @@ def _to_num(s: str) -> Optional[float]:
     if len(s) == 3 and s[1] == "十" and s[0] in _CN_NUM and s[2] in _CN_NUM:
         return float(_CN_NUM[s[0]] * 10 + _CN_NUM[s[2]])
     return None
-
-
-def _bigrams(text: str) -> set:
-    return {text[i:i + 2] for i in range(len(text) - 1)}
-
-
-def _overlap(a: str, b: str) -> float:
-    ba, bb = _bigrams(a), _bigrams(b)
-    if not ba or not bb:
-        return 0.0
-    return len(ba & bb) / float(len(ba))
 
 
 # ---------------------------------------------------------------------------
@@ -245,33 +240,25 @@ def parse_slots(text: str) -> Dict[str, Any]:
 # 模板匹配
 # ---------------------------------------------------------------------------
 def _score_one(query: str, name: str) -> Tuple[float, List[str]]:
-    info = INTENTS.get(name, {})
-    text = _norm(query)
-    score = 0.0
-    hits: List[str] = []
-    for alias in info.get("aliases", []):
-        a = _norm(alias)
-        if a and a in text:
-            score += len(a) * 1.2
-            hits.append(alias)
-    for ex in info.get("examples", []):
-        score += 1.5 * _overlap(text, _norm(ex))
-    for kws, target, weight in _BOOSTS:
-        if target == name and all(_norm(k) in text for k in kws):
-            score += weight
-    return score, hits
+    info = dict(INTENTS.get(name, {}))
+    info["name"] = name
+    boosts = [(kws, weight) for kws, target, weight in _BOOSTS if target == name]
+    row = intent_router.score_entry(query, info, boosts)
+    return row["score"], row["matched"]
+
+
+def _catalog() -> List[Dict[str, Any]]:
+    return [dict(info, name=name,
+                 boosts=[(kws, w) for kws, target, w in _BOOSTS if target == name])
+            for name, info in INTENTS.items()]
 
 
 def find_scenarios(query: str, top_k: int = 3) -> List[Dict[str, Any]]:
     """按口语描述给模板打分排序，返回候选列表。"""
-    rows = []
-    for name in INTENTS:
-        score, hits = _score_one(query, name)
-        rows.append({"name": name, "score": round(score, 2),
-                     "confidence": round(min(1.0, score / 10.0), 2),
-                     "matched": hits})
-    rows.sort(key=lambda r: r["score"], reverse=True)
-    return [r for r in rows[:max(1, int(top_k))]]
+    rows = intent_router.route(query, _catalog(), top_k=top_k)
+    return [{"name": r["name"], "score": r["score"],
+             "confidence": r["confidence"], "matched": r["matched"],
+             "ignored": r["ignored"]} for r in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -324,10 +311,14 @@ def plan_scenario(description: str) -> Dict[str, Any]:
     if not top or (top["score"] < 2.5 and not top["matched"]):
         return {
             "matched": False, "needs_clarification": True,
+            "decision": "clarify",
             "query": description, "slots": slots,
             "question": "没识别出具体场景类型。能补充是前车急刹、邻道加塞、"
                         "横穿、逆行，还是路口冲突吗？",
             "alternatives": [r["name"] for r in ranked if r["score"] > 0],
+            "candidates": [{"template": r["name"], "score": r["score"],
+                            "confidence": r["confidence"]}
+                           for r in ranked if r["score"] > 0],
         }
 
     confidence = top["confidence"]
@@ -358,6 +349,7 @@ def plan_scenario(description: str) -> Dict[str, Any]:
     return {
         "matched": True,
         "needs_clarification": ambiguous,
+        "decision": intent_router.decide(ranked, ambiguous)["action"],
         "query": description,
         "template": top["name"],
         "title": title,
@@ -370,4 +362,6 @@ def plan_scenario(description: str) -> Dict[str, Any]:
         "question": question,
         "alternatives": [{"template": r["name"], "score": r["score"]}
                          for r in ranked[1:]],
+        "candidates": [{"template": r["name"], "score": r["score"],
+                        "confidence": r["confidence"]} for r in ranked],
     }

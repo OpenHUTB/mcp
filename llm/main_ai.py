@@ -4843,11 +4843,22 @@ async def generate_scenario_from_template_impl(
     if not isinstance(params, dict):
         return "❌ params_json 必须是 JSON 对象"
 
+    # 执行前校验：参数名、取值范围、可选值
+    try:
+        from scenario_preflight import check_params, format_issues
+    except ImportError:
+        check_params = None
+    if check_params is not None:
+        issues = check_params(template, params)
+        if issues:
+            return "❌ 场景参数校验未通过：\n" + format_issues(issues)
+
     root = out_dir or str(Path(__file__).parent / "output" / "scenarios")
     os.makedirs(root, exist_ok=True)
 
     try:
-        man = generate_batch(template, n, root, seed=seed, verbose=False)
+        man = generate_batch(template, n, root, seed=seed, verbose=False,
+                             params_override=params)
     except Exception as e:
         app_logger.error("❌ 批量场景生成失败: %s" % e)
         return "❌ 生成失败：%s: %s" % (type(e).__name__, e)
@@ -5792,11 +5803,14 @@ async def run_scenario_in_carla_impl(template: str = "lead_brake",
             return "❌ 缺少依赖 scenariogeneration：%s" % e
         if template not in TEMPLATES:
             return "❌ 未知模板 `%s`\n可用：%s" % (template, ", ".join(sorted(TEMPLATES)))
-        need_map = getattr(TEMPLATES[template], "required_map", None)
-        if need_map and (map_name or "").rsplit("/", 1)[-1].lower() != need_map.lower():
-            return ("❌ 模板 `%s` 使用真实路口几何，必须在 `%s` 地图上播放："
-                    "请加 map_name=\"%s\"（服务端已在该图时会直接复用，不会切图）。"
-                    % (template, need_map, need_map))
+        try:
+            from scenario_preflight import check_map, format_issues
+        except ImportError:
+            check_map = None
+        if check_map is not None:
+            issues = check_map(template, map_name)
+            if issues:
+                return format_issues(issues)
         spec = build(template, seed=1)
         xosc_file = base / ("%s.xosc" % template)
         write_scenario(spec, str(xosc_file))
@@ -8436,12 +8450,21 @@ class FastMCPGitHubAssistant:
         if not text:
             return None
         low = text.lower()
+        try:
+            from text_norm import normalize as _normalize
+        except ImportError:
+            _normalize = lambda s: s.lower()  # noqa: E731
+        norm = _normalize(text)
+
+        def _hit(word):
+            """原文或归一化文本任一命中即可（全角、繁体、语气词不影响匹配）。"""
+            return word.lower() in low or _normalize(word) in norm
 
         best = None   # (命中长度, tool, args, label)
 
         for rule in QUICK_TEXT_INTENTS:
             for kw in rule["keywords"]:
-                if kw.lower() in low:
+                if _hit(kw):
                     if best is None or len(kw) > best[0]:
                         best = (len(kw), rule["tool"], dict(rule["args"]), kw)
 
@@ -8454,7 +8477,7 @@ class FastMCPGitHubAssistant:
         # 中文模板别名：只有带"模板/场景/播放"语境时才走播放器
         if any(k in text for k in ("模板", "场景", "播放", "openscenario", "xosc")):
             for alias, tpl in OSC_TEMPLATE_ALIASES.items():
-                if alias in text and (best is None or len(alias) > best[0]):
+                if _hit(alias) and (best is None or len(alias) > best[0]):
                     best = (len(alias), "run_scenario_in_carla",
                             {"template": tpl, "capture_times": "2,5"}, alias)
 

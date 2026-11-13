@@ -515,6 +515,8 @@ class TemplateSpec(BaseModel):
     params: Dict[str, ParamRange] = Field(default_factory=dict)
     # 该模板对应的 CARLA 侧原生函数名（复用已有资产）
     carla_function: Optional[str] = None
+    # 模板用了世界坐标/真实路口几何时，必须在这张内置地图上播放
+    required_map: Optional[str] = None
 
     def defaults(self) -> Dict[str, Any]:
         out = {}

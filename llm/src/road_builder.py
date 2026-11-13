@@ -29,6 +29,7 @@ from scenariogeneration.xodr import LaneDef
 # 各布局的默认参数（同时作为参数空间文档）
 DEFAULT_PARAMS: Dict[str, Dict[str, Any]] = {
     "straight":         {"length": 200.0, "lanes": 2, "lane_width": 3.5},
+    "wide_straight":    {"length": 200.0, "lanes": 3, "lane_width": 3.5},
     "highway_curve":    {"radius": 250.0, "angle": 90.0, "lanes": 2,
                          "lane_width": 3.5, "spiral_len": 40.0},
     "s_curve":          {"radius": 200.0, "angle": 45.0, "lanes": 2,
@@ -43,6 +44,7 @@ DEFAULT_PARAMS: Dict[str, Dict[str, Any]] = {
 
 LAYOUT_TITLES = {
     "straight": "直路",
+    "wide_straight": "三车道直路",
     "highway_curve": "高速弯道",
     "s_curve": "S 弯",
     "cross_junction": "十字路口",
@@ -223,6 +225,7 @@ def build_t_junction(p: Dict[str, Any]):
 # =====================================================================
 _BUILDERS = {
     "straight": build_straight,
+    "wide_straight": build_straight,
     "highway_curve": build_highway_curve,
     "s_curve": build_s_curve,
     "cross_junction": build_cross_junction,

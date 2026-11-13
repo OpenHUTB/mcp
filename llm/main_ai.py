@@ -4911,6 +4911,8 @@ async def list_scenario_templates_impl() -> str:
             lines.append("    标签：%s" % "、".join(t["tags"]))
         if t["carla_function"]:
             lines.append("    对应 CARLA 函数：%s()" % t["carla_function"])
+        if t.get("required_map"):
+            lines.append("    需要地图：%s（真实路口几何）" % t["required_map"])
         ps = []
         for k, v in t["params"].items():
             if v["kind"] == "choice":
@@ -4923,6 +4925,90 @@ async def list_scenario_templates_impl() -> str:
         lines.append("")
 
     lines.append("用法：调用 generate_scenario_from_template(template='cut_in', n=50, seed=42)")
+    return "\n".join(lines)
+
+
+async def find_scenario_templates_impl(query: str = "", top_k: int = 3) -> str:
+    """按一句口语描述检索最匹配的场景模板。"""
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    if not (query or "").strip():
+        return "❌ 请提供 query，例如：'前车突然急刹'、'旁边车加塞'"
+
+    try:
+        from scenario_intents import find_scenarios
+    except ImportError as e:
+        return "❌ 语义层不可用：%s" % e
+
+    hits = find_scenarios(query, top_k)
+    lines = ["🔎 查询：%s" % query, ""]
+    for i, h in enumerate(hits, 1):
+        lines.append("%d. %s  匹配度 %.2f" % (i, h["name"], h["confidence"]))
+        if h["matched"]:
+            lines.append("   命中：%s" % "、".join(h["matched"]))
+    lines.append("")
+    lines.append("下一步：plan_scenario(description='...') 得到模板 + 参数；"
+                 "或 generate_scenario_from_template(template=..., params_json='...')")
+    return "\n".join(lines)
+
+
+async def plan_scenario_impl(description: str = "") -> str:
+    """把自然语言描述规划成模板 + 参数，必要时追问。"""
+    import json as _json
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    if not (description or "").strip():
+        return "❌ 请提供 description，例如：'高速上跟车太近，前车突然急刹'"
+
+    try:
+        from scenario_intents import plan_scenario
+    except ImportError as e:
+        return "❌ 语义层不可用：%s" % e
+
+    res = plan_scenario(description)
+    lines = ["🗣️ 描述：%s" % description, ""]
+    if not res.get("matched"):
+        lines.append("❓ 没识别出具体场景类型。")
+        if res.get("question"):
+            lines.append("   %s" % res["question"])
+        if res.get("alternatives"):
+            lines.append("   候选：%s" % "、".join(res["alternatives"]))
+        return "\n".join(lines)
+
+    lines.append("✅ 识别为：%s（%s）" % (res["template"], res["title"]))
+    lines.append("   置信度：%.2f" % res["confidence"])
+    if res.get("matched_terms"):
+        lines.append("   命中词：%s" % "、".join(res["matched_terms"]))
+    lines.append("   参数：%s" % _json.dumps(res.get("params", {}),
+                                            ensure_ascii=False))
+    if res.get("required_map"):
+        lines.append("   需要地图：%s" % res["required_map"])
+    if res.get("question"):
+        lines.append("   ❓ %s" % res["question"])
+    if res.get("alternatives"):
+        alts = ["%s(%.1f)" % (a["template"], a["score"])
+                for a in res["alternatives"]]
+        lines.append("   备选：%s" % "、".join(alts))
+    lines.append("")
+    lines.append("调用：generate_scenario_from_template(template=\"%s\", "
+                 "params_json='%s')"
+                 % (res["template"],
+                    _json.dumps(res.get("params", {}), ensure_ascii=False)))
+    lines.append("")
+    lines.append("```json")
+    lines.append(_json.dumps({k: res[k] for k in
+                              ("template", "confidence", "params",
+                               "required_map", "slots", "needs_clarification")},
+                             ensure_ascii=False, indent=1))
+    lines.append("```")
     return "\n".join(lines)
 
 
@@ -5143,6 +5229,34 @@ async def generate_scenario_from_template(template: str = "cut_in", n: int = 1,
 async def list_scenario_templates() -> str:
     """列出所有可用的参数化场景模板及其参数空间。"""
     return await list_scenario_templates_impl()
+
+
+@mcp.tool()
+async def find_scenario_templates(query: str = "", top_k: int = 3) -> str:
+    """按一句口语描述检索最匹配的场景模板（支持中英文同义说法）。
+
+    用于把"前车突然急刹""旁边车加塞""行人鬼探头"这类自然语言
+    映射到模板名。只做检索，不生成场景。
+
+    Args:
+        query: 用户的自然语言描述
+        top_k: 返回候选数量，默认 3
+    """
+    return await find_scenario_templates_impl(query, top_k)
+
+
+@mcp.tool()
+async def plan_scenario(description: str = "") -> str:
+    """把自然语言描述规划成 {模板, 参数}，必要时给出追问。
+
+    会抽取描述里的速度、距离、时间、左右方向、交通参与者，
+    并按模板参数范围夹紧；未识别的参数保持默认值。
+    识别置信度低或存在歧义时，返回 needs_clarification 与追问。
+
+    Args:
+        description: 用户的自然语言场景描述
+    """
+    return await plan_scenario_impl(description)
 
 
 @mcp.tool()
@@ -5678,6 +5792,11 @@ async def run_scenario_in_carla_impl(template: str = "lead_brake",
             return "❌ 缺少依赖 scenariogeneration：%s" % e
         if template not in TEMPLATES:
             return "❌ 未知模板 `%s`\n可用：%s" % (template, ", ".join(sorted(TEMPLATES)))
+        need_map = getattr(TEMPLATES[template], "required_map", None)
+        if need_map and (map_name or "").rsplit("/", 1)[-1].lower() != need_map.lower():
+            return ("❌ 模板 `%s` 使用真实路口几何，必须在 `%s` 地图上播放："
+                    "请加 map_name=\"%s\"（服务端已在该图时会直接复用，不会切图）。"
+                    % (template, need_map, need_map))
         spec = build(template, seed=1)
         xosc_file = base / ("%s.xosc" % template)
         write_scenario(spec, str(xosc_file))

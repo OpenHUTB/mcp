@@ -34,17 +34,20 @@ graph LR
 |---|---|---|---|
 | `file_path` | string | 必填 | 待校验的 `.xosc` 文件 |
 
-## 3. 12 个场景模板
+## 3. 15 个场景模板
 
 | 模板 | 场景含义 | 实体数 | 主要触发 |
 |---|---|---|---|
 | `lead_brake` | 前车急刹 | 3 | 时间 |
 | `lead_stationary` | 前车静止 | 2 | 时间 |
 | `cut_in` | 危险切入 | 4 | 时间、时距、速度、到达 |
+| `cut_in_then_brake` | 加塞后急刹 | 3 | 时间（变道、急刹分阶段） |
 | `crossing_hazard` | 行人/车辆横穿 | 2 | 时间、距离 |
 | `low_overlap` | 前方低重叠率目标 | 3 | 时间、距离、速度、到达 |
 | `wrong_way` | 逆行 | 2 | 时间、距离 |
-| `unprotected_turn` | 路口无保护通行 | 3 | 时间、距离 |
+| `unprotected_turn` | 路口无保护通行（需 Town10HD_Opt） | 3 | 时间、距离 |
+| `merge_turn` | 路口汇入转向（需 Town10HD_Opt） | 3 | 时间、距离 |
+| `dense_lane_change` | 三车道路段连续变道 | 4 | 时间 |
 | `junction_light` | 路口信号冲突 | 3 | 时间、速度、距离 |
 | `close_follow` | 近距跟驰（TTC 触发减速） | 2 | TTC |
 | `overtake` | 超车（变道 + 相对速度） | 3 | 时间、距离、到达 |
@@ -76,6 +79,30 @@ IDM 跟驰                    -> run_scenario_in_carla(template="lead_brake", du
 还可以顺带指定截图时刻、时长与红灯时长：`IDM 跟驰，截图 6,12,15`、
 `红绿灯相位演示，红灯 8 秒`。模板名与按钮文字的完整对照见
 [New Features 第 7 节](new-features.md#7-文字直达场景无需大模型)。
+
+### 4.2 自然语言 → 模板 + 参数
+
+不知道用哪个模板时，先问路由层：
+
+```python
+plan_scenario("旁边车加塞到我前面后立刻急刹")
+```
+
+```json
+{"template": "cut_in_then_brake", "confidence": 0.95,
+ "params": {}, "required_map": null, "needs_clarification": false}
+```
+
+`find_scenario_templates(query, top_k=3)` 会额外返回候选与得分，便于确认是否歧义：
+
+```text
+cut_in_then_brake  9.5
+cut_in             3.2
+lead_brake         2.5
+```
+
+规则细节（槽位、加权、歧义判定）见
+[New Features](new-features.md#2026-11--自然语言场景路由--3-个新模板)。
 
 ## 5. 代码示例
 

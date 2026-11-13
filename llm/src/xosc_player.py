@@ -101,6 +101,7 @@ class XoscPosition:
     x: float = 0.0
     y: float = 0.0
     z: float = 0.0
+    h: float = 0.0             # WorldPosition 的航向角
     s: float = 0.0
     lane_offset: float = 0.0
     lane_id: str = ""
@@ -274,7 +275,8 @@ def _parse_position(pos_el) -> Optional[XoscPosition]:
         return XoscPosition(kind="world",
                             x=float(wp.get("x", 0) or 0),
                             y=float(wp.get("y", 0) or 0),
-                            z=float(wp.get("z", 0) or 0))
+                            z=float(wp.get("z", 0) or 0),
+                            h=float(wp.get("h", 0) or 0))
     lp = pos_el.find("LanePosition")
     if lp is not None:
         return XoscPosition(kind="lane",
@@ -672,6 +674,7 @@ def parse_xosc(path: str) -> XoscScenario:
                     if pos.kind == "world":
                         ent.position_kind = "world"
                         ent.x, ent.y, ent.z = pos.x, pos.y, pos.z
+                        ent.h = pos.h
                     else:
                         ent.position_kind = "lane"
                         ent.lane_s = pos.s
@@ -1180,18 +1183,71 @@ def _idm_follow(actor, lead, gap_target: float, speed_now: float,
 
 
 def _traj_target(points: List[List[float]], elapsed: float,
-                 lookahead: float = 0.45
+                 lookahead: float = 0.45,
+                 actor_loc: Optional[carla.Location] = None
                  ) -> Tuple[Optional[carla.Location], float, bool]:
-    """按经过时间在轨迹上插值。
+    """轨迹前瞻点。
 
-    转向目标取"当前时间 + lookahead"对应的点（纯追踪的前瞻点）。
-    否则车一旦落后于轨迹，目标会落到车后，转向直接饱和导致打转。
-    期望速度仍按当前所在段计算。
+    给了 actor_loc 时按**位置**算：先把车投影到折线上，取前方
+    lookahead 秒（按当前段速度换算成米）处的点。截图会额外 tick 若干帧，
+    车辆可能领先于时间轴；纯时间插值会让目标落到车后，转向直接归零、
+    车沿旧方向直冲（真实路口场景里非常明显）。
 
+    否则退回按经过时间插值。
     返回 (目标点, 该段期望速度, 是否已走完)。
     """
     if len(points) < 2:
         return None, 0.0, True
+
+    if actor_loc is not None:
+        # 1) 投影到折线，得到当前弧长
+        seg_lens: List[float] = []
+        best_i, best_s, best_d2 = 0, 0.0, float("inf")
+        acc = 0.0
+        for i in range(len(points) - 1):
+            x0, y0 = points[i][1], points[i][2]
+            x1, y1 = points[i + 1][1], points[i + 1][2]
+            dx, dy = x1 - x0, y1 - y0
+            seg2 = dx * dx + dy * dy
+            seg_len = math.sqrt(seg2)
+            seg_lens.append(seg_len)
+            f = 0.0
+            if seg2 > 1e-9:
+                f = max(0.0, min(1.0, ((actor_loc.x - x0) * dx
+                                       + (actor_loc.y - y0) * dy) / seg2))
+            px, py = x0 + dx * f, y0 + dy * f
+            d2 = (actor_loc.x - px) ** 2 + (actor_loc.y - py) ** 2
+            if d2 < best_d2:
+                best_d2 = d2
+                best_i = i
+                best_s = acc + seg_len * f
+            acc += seg_len
+        total = acc
+        if best_s >= total - 0.5:
+            p = points[-1]
+            return carla.Location(x=p[1], y=p[2], z=0.0), 0.0, True
+
+        # 2) 当前段速度
+        i1 = min(best_i + 1, len(points) - 1)
+        span = max(points[i1][0] - points[best_i][0], 1e-3)
+        v_des = math.hypot(points[i1][1] - points[best_i][1],
+                           points[i1][2] - points[best_i][2]) / span
+
+        # 3) 沿线取 s + v*lookahead 处的点
+        target_s = best_s + max(v_des, 1.0) * lookahead
+        acc = 0.0
+        for i in range(len(points) - 1):
+            seg_len = seg_lens[i]
+            if acc + seg_len >= target_s or i == len(points) - 2:
+                f = 0.0 if seg_len <= 1e-9 else max(
+                    0.0, min(1.0, (target_s - acc) / seg_len))
+                return (carla.Location(
+                    x=points[i][1] + (points[i + 1][1] - points[i][1]) * f,
+                    y=points[i][2] + (points[i + 1][2] - points[i][2]) * f,
+                    z=0.0), v_des, False)
+            acc += seg_len
+        p = points[-1]
+        return carla.Location(x=p[1], y=p[2], z=0.0), 0.0, True
 
     if elapsed >= points[-1][0]:
         p = points[-1]
@@ -1244,13 +1300,27 @@ def keep_lateral(actor, other, target: float, speed: float) -> None:
                                              brake=brake))
 
 
-def _lane_target(actor, delta: int, lookahead: float = 8.0
+def _lane_target(actor, delta: int, lookahead: float = 8.0,
+                 road_id: Optional[int] = None,
+                 lane_id: Optional[int] = None
                  ) -> Optional[carla.Location]:
-    """取相邻车道上、前方 lookahead 米处的位置。"""
+    """取相邻车道上、前方 lookahead 米处的位置。
+
+    给定 ``road_id`` / ``lane_id`` 时按**固定的目标车道**取点。变道过程中
+    车辆当前所在车道会从原车道切到目标车道，如果每帧都重新找"相邻车道"，
+    目标会再往外跳一条，车就会连续跨两条车道（实测横向偏出 5.1 m）。
+    """
     try:
-        wp = actor.get_world().get_map().get_waypoint(actor.get_transform().location)
+        world = actor.get_world()
+        wp = world.get_map().get_waypoint(actor.get_transform().location)
         if wp is None:
             return None
+        if road_id is not None and lane_id is not None:
+            tgt = world.get_map().get_waypoint_xodr(
+                road_id, lane_id, wp.s + lookahead)
+            if tgt is None:
+                tgt = world.get_map().get_waypoint_xodr(road_id, lane_id, wp.s)
+            return tgt.transform.location if tgt is not None else None
         if delta > 0:
             lane = wp.get_left_lane()
         else:
@@ -1263,6 +1333,23 @@ def _lane_target(actor, delta: int, lookahead: float = 8.0
         return lane.transform.location
     except Exception:
         return None
+
+
+def _align_to_lane(actor) -> None:
+    """把车头对齐到当前车道方向（变道收尾用）。
+
+    变道靠纯追踪转向，结束时车身通常还带着十几度偏角；之后切回恒速，
+    这个偏角会一直保持，车会斜着漂出车道。
+    """
+    try:
+        tf = actor.get_transform()
+        wp = actor.get_world().get_map().get_waypoint(tf.location)
+        if wp is None:
+            return
+        actor.set_transform(carla.Transform(
+            tf.location, carla.Rotation(yaw=wp.transform.rotation.yaw)))
+    except Exception:
+        pass
 
 
 def _lane_center_ahead(actor, lookahead: float = 8.0
@@ -1308,6 +1395,7 @@ def play(world: carla.World, scenario: XoscScenario,
          duration: Optional[float] = None,
          capture_at: Optional[List[float]] = None,
          out_dir: str = "", width: int = 960, height: int = 540,
+         cam_height: float = 0.0,
          dt: float = 0.05, verbose: bool = True) -> Dict[str, Any]:
     """在已有世界里播放场景。"""
     dur = duration if duration is not None else scenario.stop_time
@@ -1342,6 +1430,8 @@ def play(world: carla.World, scenario: XoscScenario,
     lane_off: Dict[str, Dict[str, Any]] = {}
     # 保持横向间距的：entity -> {target, ref}
     lateral_ctrl: Dict[str, Dict[str, Any]] = {}
+    # 变道完成后的车道保持：entity -> {road_id, lane_id}
+    lane_hold: Dict[str, Dict[str, Any]] = {}
     # 轨迹跟随的：entity -> {points, start}
     traj_ctrl: Dict[str, Dict[str, Any]] = {}
     # IDM 跟驰的：entity -> {ref, gap}
@@ -1454,11 +1544,22 @@ def play(world: carla.World, scenario: XoscScenario,
                         # 渐变从当前速度出发，逐帧更新 target_speed
                         target_speed[ev.entity] = act._start_value
                     elif act.kind == "lane_change":
+                        delta = int(act.value)
+                        # 目标车道在触发时刻就固定下来，避免变道途中重新
+                        # 选"相邻车道"导致跨两条车道。
+                        wp0 = world.get_map().get_waypoint(
+                            actor.get_transform().location)
+                        lane0 = None
+                        if wp0 is not None:
+                            lane0 = (wp0.get_left_lane() if delta > 0
+                                     else wp0.get_right_lane())
                         lane_change[ev.entity] = {
-                            "delta": int(act.value),
+                            "delta": delta,
                             "until": t + max(act.dynamics_value, 1.0),
                             "speed": target_speed.get(ev.entity, 8.0),
                             "done": False,
+                            "road_id": wp0.road_id if wp0 is not None else None,
+                            "lane_id": lane0.lane_id if lane0 is not None else None,
                         }
                     elif act.kind == "lane_offset":
                         lane_off[ev.entity] = {
@@ -1546,7 +1647,9 @@ def play(world: carla.World, scenario: XoscScenario,
             for name, actor in actors.items():
                 if name in lane_change and not lane_change[name]["done"]:
                     lc = lane_change[name]
-                    tgt = _lane_target(actor, lc["delta"])
+                    tgt = _lane_target(actor, lc["delta"],
+                                       road_id=lc["road_id"],
+                                       lane_id=lc["lane_id"])
                     if tgt is None:
                         errors.append("%s 找不到相邻车道" % name)
                         lc["done"] = True
@@ -1554,7 +1657,13 @@ def play(world: carla.World, scenario: XoscScenario,
                         _drive_towards(actor, tgt, lc["speed"], _speed_of(actor),
                                        max_lat_acc=3.0)
                         if t >= lc["until"]:
+                            _align_to_lane(actor)
                             lc["done"] = True
+                            # 变道结束后保持在目标车道内：
+                            # 若退回恒速，残余偏角会让车斜着漂出车道。
+                            if lc["lane_id"] is not None:
+                                lane_hold[name] = {"road_id": lc["road_id"],
+                                                   "lane_id": lc["lane_id"]}
                     continue
                 if name in lane_off and not lane_off[name]["done"]:
                     lo = lane_off[name]
@@ -1580,7 +1689,8 @@ def play(world: carla.World, scenario: XoscScenario,
                 if name in traj_ctrl and actor.type_id.startswith("vehicle."):
                     tc = traj_ctrl[name]
                     tgt, v_des, finished = _traj_target(
-                        tc["points"], t - tc["start"])
+                        tc["points"], t - tc["start"],
+                        actor_loc=actor.get_transform().location)
                     if finished and tgt is not None:
                         # 走完轨迹就刹停，避免继续漂移
                         actor.apply_control(carla.VehicleControl(
@@ -1599,6 +1709,15 @@ def play(world: carla.World, scenario: XoscScenario,
                                     _lane_center_ahead(actor),
                                     max_accel=fc.get("max_accel", 0.0),
                                     max_decel=fc.get("max_decel", 0.0))
+                        continue
+
+                if name in lane_hold and actor.type_id.startswith("vehicle."):
+                    lh = lane_hold[name]
+                    tgt = _lane_target(actor, 0, road_id=lh["road_id"],
+                                       lane_id=lh["lane_id"])
+                    if tgt is not None:
+                        _drive_towards(actor, tgt, target_speed.get(name, 0.0),
+                                       _speed_of(actor))
                         continue
 
                 v = target_speed.get(name, 0.0)
@@ -1642,7 +1761,8 @@ def play(world: carla.World, scenario: XoscScenario,
                         # 相机高度按最远实体撑开（垂直 FOV 约 59°，半高约
                         # 0.56*z）。取 1.85 倍 span 才装得下"前后都有车"的
                         # 跟驰场景；上限 80 m 避免车缩成像素。
-                        cam_z = min(max(span * 1.85, 40.0), 80.0)
+                        cam_z = (cam_height if cam_height > 0 else
+                                 min(max(span * 1.85, 40.0), 80.0))
 
                         # 每次截图新建相机，而不是复用并 set_transform。
                         # 复用 + set_transform 实测拿到的仍是移动前的画面

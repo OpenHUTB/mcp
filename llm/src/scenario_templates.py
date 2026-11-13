@@ -13,6 +13,9 @@ scenario_templates.py - 参数化场景模板库
 """
 from __future__ import annotations
 
+import json
+import math
+import os
 import random
 from typing import Any, Callable, Dict, List
 
@@ -128,6 +131,46 @@ def build_cut_in(p: Dict[str, Any]) -> ScenarioSpec:
         duration=duration, template="cut_in",
         params={"direction": direction, "gap": gap, "delay": delay},
         tags=["危险", "变道", "cut-in"],
+    )
+
+
+# =====================================================================
+# 模板 1b：加塞后急刹
+#   邻道车先切入本车道，稳定后立即急减速，形成"变道 + 追尾"的二次冲突。
+# =====================================================================
+def build_cut_in_then_brake(p: Dict[str, Any]) -> ScenarioSpec:
+    gap = float(p.get("gap", 15.0))
+    delay = float(p.get("delay", 2.0))
+    ego_speed = float(p.get("ego_speed", 12.0))
+    cutter_speed = float(p.get("cutter_speed", 14.0))
+    brake_speed = float(p.get("brake_speed", 2.0))
+    brake_delay = float(p.get("brake_delay", 1.0))
+    duration = float(p.get("duration", 18.0))
+
+    lc_time = 1.6
+    brake_at = delay + lc_time + brake_delay
+
+    return ScenarioSpec(
+        name="cut_in_then_brake",
+        description="邻道车在 %.1fs 后切入本车道，再过 %.1fs 急刹到 %.1fm/s"
+                    % (delay, brake_delay, brake_speed),
+        entities=[_veh("ego", 50.0, ego_speed, LANE_R),
+                  _veh("cutter", 50.0 + gap, cutter_speed, LANE_L),
+                  _veh("follower", 50.0 - max(gap, 15.0), ego_speed, LANE_R)],
+        behaviors=[_speed("ego", ego_speed, DynamicsShape.STEP, 0.0),
+                   _lane_change("cutter", +1, lc_time),
+                   _speed("cutter", brake_speed, DynamicsShape.LINEAR, 1.8),
+                   _follow("follower", "ego", 15.0)],
+        triggers=[
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0),
+            TriggerSpec(kind=TriggerKind.TIME, value=delay),
+            TriggerSpec(kind=TriggerKind.TIME, value=brake_at),
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0),
+        ],
+        duration=duration, template="cut_in_then_brake",
+        params={"gap": gap, "delay": delay, "cutter_speed": cutter_speed,
+                "brake_speed": brake_speed, "ego_speed": ego_speed},
+        tags=["危险", "变道", "急刹", "多阶段"],
     )
 
 
@@ -332,42 +375,192 @@ def build_wrong_way(p: Dict[str, Any]) -> ScenarioSpec:
 
 
 # =====================================================================
-# 模板 7：无保护左转  （源自 scenario_unprotected_turn, main_ai.py:3007）
+# 模板 7：无保护转向（真实路口，Town10HD_Opt junction 189）
+#
+# 旧实现用"直道 + 一次变道"冒充无保护左转：没有路口、没有对向车流，
+# 轨迹也不是从路网规划出来的。现在改为 GlobalRoutePlanner 在
+# Town10HD_Opt 上规划、按恒速重采样得到的真实转向轨迹：
+#   junction_north_to_east.json  北进口 -> 东出口（穿过对向直行车道）
+#   junction_north_to_west.json  北进口 -> 西出口（汇入西向车流）
+# 轨迹第 0 点就是实体初始位置，t=0 时开始跟随。
 # =====================================================================
+_TRAJ_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                         "trajectories")
+
+
+def _trajectory(name: str) -> List[List[float]]:
+    path = os.path.join(_TRAJ_DIR, name + ".json")
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    frames = data.get("frames", data) if isinstance(data, dict) else data
+    pts = [[float(fr["t"]), float(fr["x"]), float(fr["y"])] for fr in frames]
+    if len(pts) < 2:
+        raise ValueError("轨迹 %s 点数不足" % path)
+    return pts
+
+
+def _traj_entity(eid: str, pts: List[List[float]], speed: float,
+                 h: float) -> EntitySpec:
+    return EntitySpec(
+        id=eid, kind=EntityKind.VEHICLE, vehicle_category=VehicleCategory.CAR,
+        initial_speed=speed,
+        initial_position=PositionSpec.world(pts[0][1], pts[0][2], 0.0, h))
+
+
 def build_unprotected_turn(p: Dict[str, Any]) -> ScenarioSpec:
-    ego_speed = float(p.get("ego_speed", 8.0))
-    oncoming_speed = float(p.get("oncoming_speed", 12.0))
-    oncoming_gap = float(p.get("oncoming_gap", 50.0))
-    duration = float(p.get("duration", 30.0))
+    """北进口 -> 东出口：自车不让行，横穿对向直行车流。"""
+    pts = _trajectory("junction_north_to_east")
+    ego_speed = float(p.get("ego_speed", 7.0))
+    oncoming_speed = float(p.get("oncoming_speed", 9.0))
+    conflict_y = float(p.get("conflict_y", 21.0))
+    gap = float(p.get("oncoming_gap", 60.0))
+    duration = float(p.get("duration", 20.0))
+
+    oncoming = EntitySpec(
+        id="oncoming", kind=EntityKind.VEHICLE,
+        vehicle_category=VehicleCategory.CAR, initial_speed=oncoming_speed,
+        initial_position=PositionSpec.world(
+            float(p.get("oncoming_x", -45.31)), conflict_y + gap, 0.0, -90.0))
 
     return ScenarioSpec(
         name="unprotected_turn",
-        description="无保护左转，对向来车距 %.1fm" % oncoming_gap,
-        entities=[
-            _veh("ego", 50.0, ego_speed, LANE_R),
-            EntitySpec(id="oncoming", kind=EntityKind.VEHICLE,
-                       vehicle_category=VehicleCategory.CAR,
-                       initial_speed=oncoming_speed,
-                       initial_position=PositionSpec(
-                           kind=PositionKind.LANE, s=50.0 + oncoming_gap,
-                           lane_id=LANE_ONCOMING, h=180.0)),
-            _ped("ped", 0.0, 8.0, 1.4),
+        description="真实路口无保护转向：自车穿行对向直行车流"
+                    "（对向车距冲突点 %.1fm）" % gap,
+        entities=[_traj_entity("ego", pts, ego_speed, 90.0), oncoming],
+        behaviors=[
+            BehaviorSpec(kind=BehaviorKind.FOLLOW_TRAJECTORY, entity_ref="ego",
+                         trajectory_points=pts),
+            _speed("oncoming", oncoming_speed, DynamicsShape.STEP, 0.0),
         ],
-        behaviors=[_speed("ego", ego_speed, DynamicsShape.STEP, 0.0),
-                   _lane_change("ego", +1, 3.0),
-                   _speed("oncoming", oncoming_speed, DynamicsShape.STEP, 0.0),
-                   _speed("ped", 1.4, DynamicsShape.STEP, 0.0)],
         triggers=[
             TriggerSpec(kind=TriggerKind.TIME, value=0.0),
-            TriggerSpec(kind=TriggerKind.TIME, value=5.0, edge=ConditionEdge.RISING),
             TriggerSpec(kind=TriggerKind.TIME, value=0.0),
-            TriggerSpec(kind=TriggerKind.DISTANCE, rule=Rule.LESS_THAN, value=15.0,
-                        position=PositionSpec.world(0.0, 8.0, 0.0, 0.0),
-                        triggering_entity="ego"),
         ],
         duration=duration, template="unprotected_turn",
-        params={"oncoming_gap": oncoming_gap, "oncoming_speed": oncoming_speed},
-        tags=["左转", "无保护", "交叉口"],
+        params={"oncoming_gap": gap, "oncoming_speed": oncoming_speed,
+                "ego_speed": ego_speed},
+        tags=["左转", "无保护", "交叉口", "Town10HD"],
+    )
+
+
+def build_merge_turn(p: Dict[str, Any]) -> ScenarioSpec:
+    """北进口 -> 西出口：自车汇入西向车流，切入后车前方。"""
+    pts = _trajectory("junction_north_to_west")
+    ego_speed = float(p.get("ego_speed", 8.0))
+    merge_speed = float(p.get("merge_speed", 10.5))
+    merge_x = float(p.get("merge_x", -63.95))
+    merge_y = float(p.get("merge_y", 13.0))
+    gap = float(p.get("merge_gap", 72.0))
+    brake_delay = float(p.get("brake_delay", 7.0))
+    duration = float(p.get("duration", 18.0))
+
+    merge_car = EntitySpec(
+        id="merge_car", kind=EntityKind.VEHICLE,
+        vehicle_category=VehicleCategory.CAR, initial_speed=merge_speed,
+        initial_position=PositionSpec.world(merge_x + gap, merge_y, 0.0, 180.0))
+
+    return ScenarioSpec(
+        name="merge_turn",
+        description="真实路口汇入：自车切入西向车流，后车需减速避让"
+                    "（后车距汇入点 %.1fm）" % gap,
+        entities=[_traj_entity("ego", pts, ego_speed, 90.0), merge_car],
+        behaviors=[
+            BehaviorSpec(kind=BehaviorKind.FOLLOW_TRAJECTORY, entity_ref="ego",
+                         trajectory_points=pts),
+            _speed("merge_car", merge_speed, DynamicsShape.STEP, 0.0),
+            _speed("merge_car", ego_speed, DynamicsShape.LINEAR, 2.0),
+        ],
+        triggers=[
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0),
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0),
+            TriggerSpec(kind=TriggerKind.TIME, value=brake_delay),
+        ],
+        duration=duration, template="merge_turn",
+        params={"merge_gap": gap, "merge_speed": merge_speed,
+                "ego_speed": ego_speed},
+        tags=["汇入", "右转", "交叉口", "Town10HD"],
+    )
+
+
+# =====================================================================
+# 模板 9：密集变道（多车道直路）
+#   自车在 3 车道同向直路上连续两次向左变道，切入邻道后车前方。
+#   轨迹用余弦横向过渡生成，保证变道是平滑曲线而不是折线。
+# =====================================================================
+def _dense_lc_traj(speed: float = 14.0, x0: float = 30.0,
+                   y0: float = 1.75, lane_w: float = 3.5,
+                   t_lc1: float = 1.5, t_lc2: float = 4.6,
+                   lc_dur: float = 1.6, total: float = 9.0
+                   ) -> List[List[float]]:
+    def y_at(t: float) -> float:
+        y = y0
+        for t_start in (t_lc1, t_lc2):
+            f = (t - t_start) / lc_dur
+            if f <= 0.0:
+                continue
+            f = min(f, 1.0)
+            y += lane_w * 0.5 * (1.0 - math.cos(math.pi * f))
+        return y
+
+    pts = []
+    steps = int(round(total / 0.2))
+    for i in range(steps + 1):
+        t = i * 0.2
+        pts.append([round(t, 3), round(x0 + speed * t, 3),
+                    round(y_at(t), 3)])
+    return pts
+
+
+def build_dense_lane_change(p: Dict[str, Any]) -> ScenarioSpec:
+    speed = float(p.get("ego_speed", 14.0))
+    lane_w = float(p.get("lane_width", 3.5))
+    gap_ahead = float(p.get("gap_ahead", 60.0))
+    gap_left = float(p.get("gap_left", 10.0))
+    gap_far = float(p.get("gap_far", 30.0))
+    duration = float(p.get("duration", 12.0))
+
+    x0 = 30.0
+    pts = _dense_lc_traj(speed=speed, x0=x0, y0=1.75, lane_w=lane_w)
+
+    return ScenarioSpec(
+        name="dense_lane_change",
+        description="3 车道连续两次向左变道，切入邻道后车前方",
+        entities=[
+            _traj_entity("ego", pts, speed, 0.0),
+            _veh("lead", x0 + gap_ahead, 8.0, LANE_R),
+            _veh("left_rear", x0 - gap_left, 16.0, LANE_L),
+            _veh("far_left", x0 - gap_far, 17.0, "-3"),
+            _veh("follower", x0 - 25.0, speed, LANE_R),
+        ],
+        behaviors=[
+            BehaviorSpec(kind=BehaviorKind.FOLLOW_TRAJECTORY, entity_ref="ego",
+                         trajectory_points=pts),
+            _speed("lead", 8.0, DynamicsShape.STEP, 0.0),
+            _speed("left_rear", 16.0, DynamicsShape.STEP, 0.0),
+            _speed("far_left", 17.0, DynamicsShape.STEP, 0.0),
+            _follow("follower", "ego", 20.0),
+            _follow("left_rear", "ego", 8.0),
+            _follow("far_left", "ego", 8.0),
+            _speed("left_rear", 16.0, DynamicsShape.LINEAR, 2.0),
+            _speed("far_left", 17.0, DynamicsShape.LINEAR, 2.0),
+        ],
+        triggers=[
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0),
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0),
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0),
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0),
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0),
+            # 第一次变道结束后，被切入的后车开始跟驰
+            TriggerSpec(kind=TriggerKind.TIME, value=3.3),
+            # 第二次变道结束后，第二辆后车开始跟驰
+            TriggerSpec(kind=TriggerKind.TIME, value=6.4),
+            # 自车驶离该车道后，恢复各自速度
+            TriggerSpec(kind=TriggerKind.TIME, value=7.2),
+            TriggerSpec(kind=TriggerKind.TIME, value=9.0),
+        ],
+        duration=duration, template="dense_lane_change",
+        params={"ego_speed": speed, "gap_left": gap_left, "gap_far": gap_far},
+        tags=["变道", "密集", "多车道"],
     )
 
 
@@ -603,12 +796,15 @@ def build_signal_phase(p: Dict[str, Any]) -> ScenarioSpec:
 # =====================================================================
 _BUILDERS: Dict[str, Callable[[Dict[str, Any]], ScenarioSpec]] = {
     "cut_in": build_cut_in,
+    "cut_in_then_brake": build_cut_in_then_brake,
     "lead_brake": build_lead_brake,
     "lead_stationary": build_lead_stationary,
     "crossing_hazard": build_crossing_hazard,
     "low_overlap": build_low_overlap,
     "wrong_way": build_wrong_way,
     "unprotected_turn": build_unprotected_turn,
+    "merge_turn": build_merge_turn,
+    "dense_lane_change": build_dense_lane_change,
     "junction_light": build_junction_light,
     "close_follow": build_close_follow,
     "overtake": build_overtake,
@@ -627,6 +823,20 @@ TEMPLATES: Dict[str, TemplateSpec] = {
             "delay": ParamRange(kind="uniform", low=1.5, high=6.0, unit="s"),
             "ego_speed": ParamRange(kind="uniform", low=8.0, high=18.0, unit="m/s"),
             "cutter_speed": ParamRange(kind="uniform", low=8.0, high=20.0, unit="m/s"),
+        }),
+    "cut_in_then_brake": TemplateSpec(
+        name="cut_in_then_brake", title="加塞后急刹",
+        description="邻道车切入本车道后立即急减速，形成变道 + 追尾的二次冲突",
+        carla_function="scenario_cut_in", tags=["危险", "变道", "急刹", "多阶段"],
+        params={
+            "gap": ParamRange(kind="uniform", low=8.0, high=25.0, unit="m"),
+            "delay": ParamRange(kind="uniform", low=1.5, high=5.0, unit="s"),
+            "cutter_speed": ParamRange(kind="uniform", low=10.0, high=18.0,
+                                       unit="m/s"),
+            "brake_speed": ParamRange(kind="uniform", low=0.0, high=5.0,
+                                      unit="m/s"),
+            "ego_speed": ParamRange(kind="uniform", low=8.0, high=16.0,
+                                    unit="m/s"),
         }),
     "lead_brake": TemplateSpec(
         name="lead_brake", title="前车急刹",
@@ -676,13 +886,40 @@ TEMPLATES: Dict[str, TemplateSpec] = {
             "ego_speed": ParamRange(kind="uniform", low=8.0, high=18.0, unit="m/s"),
         }),
     "unprotected_turn": TemplateSpec(
-        name="unprotected_turn", title="无保护左转",
-        description="无左转保护信号下穿越对向车流（源自 scenario_unprotected_turn）",
+        name="unprotected_turn", title="无保护转向（真实路口）",
+        description="自车沿真实路口转向轨迹穿行对向直行车流"
+                    "（Town10HD_Opt junction 189）",
         carla_function="scenario_unprotected_turn", tags=["左转", "交叉口"],
+        required_map="Town10HD_Opt",
         params={
-            "oncoming_gap": ParamRange(kind="uniform", low=25.0, high=80.0, unit="m"),
-            "oncoming_speed": ParamRange(kind="uniform", low=8.0, high=16.0, unit="m/s"),
-            "ego_speed": ParamRange(kind="uniform", low=5.0, high=12.0, unit="m/s"),
+            "oncoming_gap": ParamRange(kind="uniform", low=60.0, high=100.0,
+                                       unit="m"),
+            "oncoming_speed": ParamRange(kind="uniform", low=9.0, high=12.0,
+                                         unit="m/s"),
+            "ego_speed": ParamRange(kind="fixed", value=7.0, unit="m/s"),
+        }),
+    "merge_turn": TemplateSpec(
+        name="merge_turn", title="汇入转向（真实路口）",
+        description="自车沿真实路口转向轨迹汇入西向车流，切入后车前方"
+                    "（Town10HD_Opt junction 189）",
+        carla_function="scenario_unprotected_turn", tags=["汇入", "交叉口"],
+        required_map="Town10HD_Opt",
+        params={
+            "merge_gap": ParamRange(kind="uniform", low=72.0, high=110.0,
+                                    unit="m"),
+            "merge_speed": ParamRange(kind="uniform", low=10.5, high=13.0,
+                                      unit="m/s"),
+            "ego_speed": ParamRange(kind="fixed", value=8.0, unit="m/s"),
+        }),
+    "dense_lane_change": TemplateSpec(
+        name="dense_lane_change", title="密集变道",
+        description="3 车道直路上连续两次向左变道，切入邻道后车前方",
+        carla_function="scenario_cut_in", tags=["变道", "多车道"],
+        params={
+            "ego_speed": ParamRange(kind="uniform", low=12.0, high=18.0,
+                                    unit="m/s"),
+            "gap_left": ParamRange(kind="uniform", low=6.0, high=20.0, unit="m"),
+            "gap_far": ParamRange(kind="uniform", low=20.0, high=40.0, unit="m"),
         }),
     "junction_light": TemplateSpec(
         name="junction_light", title="信号交叉口冲突",
@@ -743,6 +980,7 @@ def list_templates() -> List[Dict[str, Any]]:
         out.append({
             "name": name, "title": t.title, "description": t.description,
             "tags": t.tags, "carla_function": t.carla_function,
+            "required_map": t.required_map,
             "params": {k: r.model_dump() for k, r in t.params.items()},
             "defaults": t.defaults(),
         })

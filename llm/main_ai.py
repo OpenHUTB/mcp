@@ -3544,6 +3544,47 @@ class CarlaClient:
             app_logger.warning(f"⚠️ 更新第一人称视角出错: {e}")
 
 
+    # 各视角模式下相机与目标的期望距离区间（米）：(最小, 最大)
+    _VIEW_DISTANCE_RANGE = {
+        "third_person": (4.0, 8.0),
+        "first_person": (0.3, 2.5),
+        "overhead": (25.0, 35.0),
+    }
+
+    async def _verify_view_applied(self, view_mode, target_actor):
+        """回读相机位置，确认视角真的停在了目标附近。
+
+        某些新版 HUTB 默认启动无人机视角，会持续覆盖客户端设置的相机，
+        表现为「日志显示切换成功、画面却没变」。这里用相机与目标的实际距离
+        做一次自检，把这类版本不兼容显式暴露出来，避免静默失败。
+
+        Returns:
+            tuple[bool, str]: (是否生效, 实际距离说明)
+        """
+        expected = self._VIEW_DISTANCE_RANGE.get(view_mode)
+        if expected is None or target_actor is None:
+            return True, ""
+
+        await asyncio.sleep(0.3)
+        try:
+            if not target_actor.is_alive:
+                return True, ""
+            spec_loc = self.world.get_spectator().get_transform().location
+            actor_loc = target_actor.get_transform().location
+            distance = math.sqrt(
+                (spec_loc.x - actor_loc.x) ** 2
+                + (spec_loc.y - actor_loc.y) ** 2
+                + (spec_loc.z - actor_loc.z) ** 2
+            )
+            # 放宽区间，避免目标在自检窗口内正常移动造成误报
+            low, high = expected[0] * 0.5, expected[1] * 1.6
+            if low <= distance <= high:
+                return True, ""
+            return False, f"{distance:.1f}m"
+        except Exception as e:
+            app_logger.warning(f"⚠️ 视角自检失败: {e}")
+            return True, ""
+
     def get_all_pedestrians(self):
         """获取当前世界中所有行人列表"""
         if self.world is None:
@@ -3928,6 +3969,26 @@ class CarlaClient:
 
         else:
             result = f"❌ 未知的视角模式: {view_mode}"
+
+        # 设置完成后自检：相机若被模拟器自身的相机模式覆盖，会在这里显式报出来
+        if target_actor is not None and view_mode in self._VIEW_DISTANCE_RANGE:
+            held, detail = await self._verify_view_applied(view_mode, target_actor)
+            if not held:
+                version = ""
+                try:
+                    version = self.client.get_server_version()
+                except Exception:
+                    pass
+                app_logger.warning(
+                    f"⚠️ 视角未生效：相机与目标实际距离 {detail}，疑似模拟器版本不兼容"
+                )
+                result += (
+                    f"\n⚠️ 画面可能没有跟着切换：相机实际距目标 {detail}。"
+                    f"当前模拟器版本 {version or '未知'} 与代码不匹配 —— "
+                    "新版 HUTB 默认启动无人机视角，会覆盖外部设置的相机。"
+                    "请改用 HUTB v2.2（同步至 CARLA 0.9.16）："
+                    "https://github.com/OpenHUTB/hutb/releases/tag/v2.2"
+                )
 
         return result
 
@@ -4843,11 +4904,22 @@ async def generate_scenario_from_template_impl(
     if not isinstance(params, dict):
         return "❌ params_json 必须是 JSON 对象"
 
+    # 执行前校验：参数名、取值范围、可选值
+    try:
+        from scenario_preflight import check_params, format_issues
+    except ImportError:
+        check_params = None
+    if check_params is not None:
+        issues = check_params(template, params)
+        if issues:
+            return "❌ 场景参数校验未通过：\n" + format_issues(issues)
+
     root = out_dir or str(Path(__file__).parent / "output" / "scenarios")
     os.makedirs(root, exist_ok=True)
 
     try:
-        man = generate_batch(template, n, root, seed=seed, verbose=False)
+        man = generate_batch(template, n, root, seed=seed, verbose=False,
+                             params_override=params)
     except Exception as e:
         app_logger.error("❌ 批量场景生成失败: %s" % e)
         return "❌ 生成失败：%s: %s" % (type(e).__name__, e)
@@ -4911,6 +4983,8 @@ async def list_scenario_templates_impl() -> str:
             lines.append("    标签：%s" % "、".join(t["tags"]))
         if t["carla_function"]:
             lines.append("    对应 CARLA 函数：%s()" % t["carla_function"])
+        if t.get("required_map"):
+            lines.append("    需要地图：%s（真实路口几何）" % t["required_map"])
         ps = []
         for k, v in t["params"].items():
             if v["kind"] == "choice":
@@ -4923,6 +4997,90 @@ async def list_scenario_templates_impl() -> str:
         lines.append("")
 
     lines.append("用法：调用 generate_scenario_from_template(template='cut_in', n=50, seed=42)")
+    return "\n".join(lines)
+
+
+async def find_scenario_templates_impl(query: str = "", top_k: int = 3) -> str:
+    """按一句口语描述检索最匹配的场景模板。"""
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    if not (query or "").strip():
+        return "❌ 请提供 query，例如：'前车突然急刹'、'旁边车加塞'"
+
+    try:
+        from scenario_intents import find_scenarios
+    except ImportError as e:
+        return "❌ 语义层不可用：%s" % e
+
+    hits = find_scenarios(query, top_k)
+    lines = ["🔎 查询：%s" % query, ""]
+    for i, h in enumerate(hits, 1):
+        lines.append("%d. %s  匹配度 %.2f" % (i, h["name"], h["confidence"]))
+        if h["matched"]:
+            lines.append("   命中：%s" % "、".join(h["matched"]))
+    lines.append("")
+    lines.append("下一步：plan_scenario(description='...') 得到模板 + 参数；"
+                 "或 generate_scenario_from_template(template=..., params_json='...')")
+    return "\n".join(lines)
+
+
+async def plan_scenario_impl(description: str = "") -> str:
+    """把自然语言描述规划成模板 + 参数，必要时追问。"""
+    import json as _json
+    import sys as _sys
+
+    src = _scenario_src_dir()
+    if src not in _sys.path:
+        _sys.path.insert(0, src)
+
+    if not (description or "").strip():
+        return "❌ 请提供 description，例如：'高速上跟车太近，前车突然急刹'"
+
+    try:
+        from scenario_intents import plan_scenario
+    except ImportError as e:
+        return "❌ 语义层不可用：%s" % e
+
+    res = plan_scenario(description)
+    lines = ["🗣️ 描述：%s" % description, ""]
+    if not res.get("matched"):
+        lines.append("❓ 没识别出具体场景类型。")
+        if res.get("question"):
+            lines.append("   %s" % res["question"])
+        if res.get("alternatives"):
+            lines.append("   候选：%s" % "、".join(res["alternatives"]))
+        return "\n".join(lines)
+
+    lines.append("✅ 识别为：%s（%s）" % (res["template"], res["title"]))
+    lines.append("   置信度：%.2f" % res["confidence"])
+    if res.get("matched_terms"):
+        lines.append("   命中词：%s" % "、".join(res["matched_terms"]))
+    lines.append("   参数：%s" % _json.dumps(res.get("params", {}),
+                                            ensure_ascii=False))
+    if res.get("required_map"):
+        lines.append("   需要地图：%s" % res["required_map"])
+    if res.get("question"):
+        lines.append("   ❓ %s" % res["question"])
+    if res.get("alternatives"):
+        alts = ["%s(%.1f)" % (a["template"], a["score"])
+                for a in res["alternatives"]]
+        lines.append("   备选：%s" % "、".join(alts))
+    lines.append("")
+    lines.append("调用：generate_scenario_from_template(template=\"%s\", "
+                 "params_json='%s')"
+                 % (res["template"],
+                    _json.dumps(res.get("params", {}), ensure_ascii=False)))
+    lines.append("")
+    lines.append("```json")
+    lines.append(_json.dumps({k: res[k] for k in
+                              ("template", "confidence", "params",
+                               "required_map", "slots", "needs_clarification")},
+                             ensure_ascii=False, indent=1))
+    lines.append("```")
     return "\n".join(lines)
 
 
@@ -5143,6 +5301,34 @@ async def generate_scenario_from_template(template: str = "cut_in", n: int = 1,
 async def list_scenario_templates() -> str:
     """列出所有可用的参数化场景模板及其参数空间。"""
     return await list_scenario_templates_impl()
+
+
+@mcp.tool()
+async def find_scenario_templates(query: str = "", top_k: int = 3) -> str:
+    """按一句口语描述检索最匹配的场景模板（支持中英文同义说法）。
+
+    用于把"前车突然急刹""旁边车加塞""行人鬼探头"这类自然语言
+    映射到模板名。只做检索，不生成场景。
+
+    Args:
+        query: 用户的自然语言描述
+        top_k: 返回候选数量，默认 3
+    """
+    return await find_scenario_templates_impl(query, top_k)
+
+
+@mcp.tool()
+async def plan_scenario(description: str = "") -> str:
+    """把自然语言描述规划成 {模板, 参数}，必要时给出追问。
+
+    会抽取描述里的速度、距离、时间、左右方向、交通参与者，
+    并按模板参数范围夹紧；未识别的参数保持默认值。
+    识别置信度低或存在歧义时，返回 needs_clarification 与追问。
+
+    Args:
+        description: 用户的自然语言场景描述
+    """
+    return await plan_scenario_impl(description)
 
 
 @mcp.tool()
@@ -5678,6 +5864,14 @@ async def run_scenario_in_carla_impl(template: str = "lead_brake",
             return "❌ 缺少依赖 scenariogeneration：%s" % e
         if template not in TEMPLATES:
             return "❌ 未知模板 `%s`\n可用：%s" % (template, ", ".join(sorted(TEMPLATES)))
+        try:
+            from scenario_preflight import check_map, format_issues
+        except ImportError:
+            check_map = None
+        if check_map is not None:
+            issues = check_map(template, map_name)
+            if issues:
+                return format_issues(issues)
         spec = build(template, seed=1)
         xosc_file = base / ("%s.xosc" % template)
         write_scenario(spec, str(xosc_file))
@@ -8317,12 +8511,21 @@ class FastMCPGitHubAssistant:
         if not text:
             return None
         low = text.lower()
+        try:
+            from text_norm import normalize as _normalize
+        except ImportError:
+            _normalize = lambda s: s.lower()  # noqa: E731
+        norm = _normalize(text)
+
+        def _hit(word):
+            """原文或归一化文本任一命中即可（全角、繁体、语气词不影响匹配）。"""
+            return word.lower() in low or _normalize(word) in norm
 
         best = None   # (命中长度, tool, args, label)
 
         for rule in QUICK_TEXT_INTENTS:
             for kw in rule["keywords"]:
-                if kw.lower() in low:
+                if _hit(kw):
                     if best is None or len(kw) > best[0]:
                         best = (len(kw), rule["tool"], dict(rule["args"]), kw)
 
@@ -8335,7 +8538,7 @@ class FastMCPGitHubAssistant:
         # 中文模板别名：只有带"模板/场景/播放"语境时才走播放器
         if any(k in text for k in ("模板", "场景", "播放", "openscenario", "xosc")):
             for alias, tpl in OSC_TEMPLATE_ALIASES.items():
-                if alias in text and (best is None or len(alias) > best[0]):
+                if _hit(alias) and (best is None or len(alias) > best[0]):
                     best = (len(alias), "run_scenario_in_carla",
                             {"template": tpl, "capture_times": "2,5"}, alias)
 

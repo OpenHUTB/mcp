@@ -96,6 +96,19 @@ def load_xodr_world(client: carla.Client, xodr_path: str,
 
 
 def load_builtin_world(client: carla.Client, map_name: str = "Town03") -> carla.World:
+    """加载内置地图；服务端已经在这张图上时直接复用。
+
+    切图要重建地图与导航网格，耗时且容易把服务端打挂，
+    所以同图时不再调用 load_world。
+    """
+    try:
+        current = client.get_world().get_map().name
+    except Exception:
+        current = ""
+    cur = current.rsplit("/", 1)[-1].lower()
+    want = map_name.rsplit("/", 1)[-1].lower()
+    if cur and cur == want:
+        return client.get_world()
     return client.load_world(map_name)
 
 

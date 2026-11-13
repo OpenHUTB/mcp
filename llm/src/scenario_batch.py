@@ -43,6 +43,7 @@ def generate_batch(
     validate_each: bool = True,
     strict: bool = False,
     verbose: bool = True,
+    params_override: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """按模板批量生成 n 个场景。
 
@@ -70,9 +71,10 @@ def generate_batch(
     ok = failed = 0
 
     for i in range(n):
-        # 1. 采样参数（seed 决定，可复现）
+        # 1. 采样参数（seed 决定，可复现）；调用方显式传入的参数优先
         params = tpl.sample_params(rng)
-        spec = build(template, params,
+        if params_override:
+            params.update(params_override)        spec = build(template, params,
                      seed=(seed + i) if seed is not None else None)
 
         # 2. 文件名去重

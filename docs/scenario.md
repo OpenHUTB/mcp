@@ -82,7 +82,7 @@ IDM 跟驰                    -> run_scenario_in_carla(template="lead_brake", du
 
 ### 4.2 自然语言 → 模板 + 参数
 
-不知道用哪个模板时，先问路由层：
+无法确定模板时，可先调用语义解析：
 
 ```python
 plan_scenario("旁边车加塞到我前面后立刻急刹")
@@ -93,7 +93,7 @@ plan_scenario("旁边车加塞到我前面后立刻急刹")
  "params": {}, "required_map": null, "needs_clarification": false}
 ```
 
-`find_scenario_templates(query, top_k=3)` 会额外返回候选与得分，便于确认是否歧义：
+`find_scenario_templates(query, top_k=3)` 额外返回候选及得分，用于判断是否存在歧义：
 
 ```text
 cut_in_then_brake  9.5
@@ -101,8 +101,8 @@ cut_in             3.2
 lead_brake         2.5
 ```
 
-规则细节（槽位、加权、歧义判定）见
-[New Features](new-features.md#2026-11--自然语言场景路由--3-个新模板)。
+槽位、加权与歧义判定的细节见
+[New Features](new-features.md#2026-11--自然语言场景生成)。
 
 ## 5. 代码示例
 

@@ -1395,6 +1395,7 @@ def play(world: carla.World, scenario: XoscScenario,
          duration: Optional[float] = None,
          capture_at: Optional[List[float]] = None,
          out_dir: str = "", width: int = 960, height: int = 540,
+         cam_height: float = 0.0,
          dt: float = 0.05, verbose: bool = True) -> Dict[str, Any]:
     """在已有世界里播放场景。"""
     dur = duration if duration is not None else scenario.stop_time
@@ -1760,7 +1761,8 @@ def play(world: carla.World, scenario: XoscScenario,
                         # 相机高度按最远实体撑开（垂直 FOV 约 59°，半高约
                         # 0.56*z）。取 1.85 倍 span 才装得下"前后都有车"的
                         # 跟驰场景；上限 80 m 避免车缩成像素。
-                        cam_z = min(max(span * 1.85, 40.0), 80.0)
+                        cam_z = (cam_height if cam_height > 0 else
+                                 min(max(span * 1.85, 40.0), 80.0))
 
                         # 每次截图新建相机，而不是复用并 set_transform。
                         # 复用 + set_transform 实测拿到的仍是移动前的画面

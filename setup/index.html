@@ -63,6 +63,12 @@
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#6-验证安装">6. 验证安装</a>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="#7-常见问题">7. 常见问题</a>
+<ul>
+<li class="toctree-l3"><a class="reference internal" href="#视角切换提示成功但画面没有跟着变">视角切换提示成功，但画面没有跟着变</a>
+</li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -248,7 +254,15 @@ CarlaUE4.exe -RenderOffScreen -quality-level=Low -nosound -carla-port=2000
 <td>返回版本 0.9.16 与 13 个内置地图</td>
 </tr>
 </tbody>
-</table></div>
+</table>
+<h2 id="7-常见问题">7. 常见问题</h2>
+<h3 id="视角切换提示成功但画面没有跟着变">视角切换提示成功，但画面没有跟着变</h3>
+<p>日志里能看到 <code>视角已设置</code>、<code>视角跟随已启用</code>，模拟器窗口却还是原来的机位。
+这是模拟器版本不兼容：新版 HUTB 默认启动无人机视角，会持续覆盖客户端设置的相机。
+本项目按 <strong>CARLA 0.9.16</strong> 开发，请改用
+<a href="https://github.com/OpenHUTB/hutb/releases/tag/v2.2">HUTB v2.2（同步至 0.9.16）</a>。</p>
+<p>切换视角后代码会回读一次相机位置做自检，只要相机没有停在目标附近，
+对话里会直接给出这条提示，不会再静默成功。</p></div>
 </div>
 </div><footer>
 <div aria-label="Footer Navigation" class="rst-footer-buttons" role="navigation">

@@ -43,6 +43,24 @@
 <ul class="current">
 <li class="toctree-l1 current"><a class="reference internal current" href="#">New Features</a>
 <ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="#2026-11--自然语言场景生成">2026-11 · 自然语言场景生成</a>
+<ul>
+<li class="toctree-l3"><a class="reference internal" href="#1-用法">1. 用法</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#2-支持的表达">2. 支持的表达</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#3-新增模板">3. 新增模板</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#4-解决的问题">4. 解决的问题</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#5-实测结果">5. 实测结果</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#6-输入容错">6. 输入容错</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#7-已知限制">7. 已知限制</a>
+</li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="#2026-11--openscenario-播放器增强位置解析--新条件--红绿灯--跟驰变道">2026-11 · OpenSCENARIO 播放器增强：位置解析 / 新条件 / 红绿灯 / 跟驰变道</a>
 <ul>
 <li class="toctree-l3"><a class="reference internal" href="#能力">能力</a>
@@ -156,6 +174,186 @@
 <div><h1 id="new-features">New Features</h1>
 <p>按时间倒序记录新增功能。每个功能都给出：<strong>能力说明、调用方式、示例、效果</strong>。</p>
 <p>图片全部使用绝对链接。</p>
+<hr/>
+<h2 id="2026-11--自然语言场景生成">2026-11 · 自然语言场景生成</h2>
+<p>此前由大模型直接编写场景脚本，存在两类问题：生成的代码无法编译，或调用不存在的接口。
+本版将流程拆分为<strong>语义解析</strong>与<strong>模板装配</strong>两步：语义层只负责识别场景类型与参数，
+脚本由模板库生成，可执行性由模板库保证。</p>
+<h3 id="1-用法">1. 用法</h3>
+<p>直接用自然语言描述场景：</p>
+<div class="highlight"><pre><span></span><code>旁边车加塞到我前面后立刻急刹
+前方车辆突然急刹，我车速 60
+有车从左侧强行并线，间距 10 米
+</code></pre></div>
+<p>需要确认匹配结果时，先调用语义解析：</p>
+<div class="highlight"><pre><span></span><code><span class="n">plan_scenario</span><span class="p">(</span><span class="s2">"旁边车加塞到我前面后立刻急刹"</span><span class="p">)</span>
+<span class="c1"># → {"template": "cut_in_then_brake", "confidence": 0.95, "params": {}}</span>
+</code></pre></div>
+<p>再按模板执行：</p>
+<div class="highlight"><pre><span></span><code>run_scenario_in_carla(template="cut_in_then_brake", xodr_layout="wide_straight")
+</code></pre></div>
+<h3 id="2-支持的表达">2. 支持的表达</h3>
+<table>
+<thead>
+<tr>
+<th>槽位</th>
+<th>表达方式</th>
+<th>示例</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>速度</td>
+<td>m/s、km/h、中文数字</td>
+<td><code>60</code>、<code>60km/h</code>、<code>十五米每秒</code></td>
+</tr>
+<tr>
+<td>距离</td>
+<td>米、公里</td>
+<td><code>间距 10 米</code>、<code>20m</code></td>
+</tr>
+<tr>
+<td>时间</td>
+<td>秒、分钟</td>
+<td><code>3 秒后</code>、<code>两分钟</code></td>
+</tr>
+<tr>
+<td>方向</td>
+<td>左、右、对向</td>
+<td><code>从左侧强行并线</code></td>
+</tr>
+<tr>
+<td>参与者</td>
+<td>车、行人、摩托车</td>
+<td><code>行人横穿</code></td>
+</tr>
+<tr>
+<td>数量</td>
+<td>阿拉伯数字、中文数字</td>
+<td><code>三辆车</code></td>
+</tr>
+</tbody>
+</table>
+<p>当一句话同时匹配多个模板时，<code>find_scenario_templates(query)</code> 返回候选及得分；
+最高分未明显领先时输出"需要澄清"，不直接选择。</p>
+<h3 id="3-新增模板">3. 新增模板</h3>
+<table>
+<thead>
+<tr>
+<th>模板</th>
+<th>场景</th>
+<th>需要地图</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cut_in_then_brake</code></td>
+<td>邻道车辆切入后制动</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>dense_lane_change</code></td>
+<td>三车道连续变道</td>
+<td>—</td>
+</tr>
+<tr>
+<td><code>merge_turn</code></td>
+<td>路口汇入转向</td>
+<td>Town10HD_Opt</td>
+</tr>
+</tbody>
+</table>
+<p>此外，<code>unprotected_turn</code> 调整为真实路口（北进口至东出口），并加入对向直行车辆。</p>
+<p><img alt="加塞后急刹" src="../img/scenario_cut_in_then_brake.gif"/></p>
+<div align="center"><i>cut_in_then_brake：变道 → 急刹 → 追尾（画面顶部为口语输入与命中模板）</i></div>
+<h3 id="4-解决的问题">4. 解决的问题</h3>
+<p>录制动图过程中发现加塞车辆未真正进入自车车道，据此定位并修复两个播放器缺陷：</p>
+<ol>
+<li><strong>变道跨越两条车道</strong>。原实现每帧重新计算相邻车道，车辆进入目标车道后目标再次外移，
+   实测横向偏差 5.1 m。修复方式为在触发时刻锁定目标车道。</li>
+<li><strong>变道结束后车辆漂移</strong>。变道结束时车身仍存在约 15° 偏角，恢复匀速后该偏角被保留，
+   车辆逐渐驶出车道。修复方式为结束时将航向对齐车道切线，并在后续保持目标车道。</li>
+</ol>
+<h3 id="5-实测结果">5. 实测结果</h3>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>模板离线回归</td>
+<td>全部通过</td>
+</tr>
+<tr>
+<td>中文表达识别（12 条）</td>
+<td>全部命中预期模板</td>
+</tr>
+<tr>
+<td>MCP 端到端（解析 → 执行）</td>
+<td>3 个实体、4 个事件全部触发</td>
+</tr>
+<tr>
+<td>真实路口模板</td>
+<td><code>unprotected_turn</code> / <code>merge_turn</code> 已在 Town10HD_Opt 出图</td>
+</tr>
+</tbody>
+</table>
+<h3 id="6-输入容错">6. 输入容错</h3>
+<p>口语输入不只差在语义，也差在写法。本版新增统一的文本归一化层
+（<code>llm/src/text_norm.py</code>）与打分层（<code>llm/src/intent_router.py</code>）：</p>
+<table>
+<thead>
+<tr>
+<th>情况</th>
+<th>示例</th>
+<th>处理方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>全角、繁体、语气词</td>
+<td><code>前車突然急剎</code>、<code>麻烦帮我搞一个…</code></td>
+<td>统一为简体，去除标点与客套话</td>
+</tr>
+<tr>
+<td>单位写法不一</td>
+<td><code>60码</code>、<code>六十公里每小时</code></td>
+<td>统一换算为 km/h</td>
+</tr>
+<tr>
+<td>同义动作</td>
+<td><code>一脚刹停</code>、<code>紧急制动</code></td>
+<td>追加规范说法“急刹”后参与匹配</td>
+</tr>
+<tr>
+<td>拼写略有差异</td>
+<td><code>加塞后一脚刹停</code></td>
+<td>用最长公共片段做近似匹配</td>
+</tr>
+<tr>
+<td>否定表达</td>
+<td><code>不要加塞</code></td>
+<td>命中项被否定词过滤，返回澄清而非错误模板</td>
+</tr>
+</tbody>
+</table>
+<p>匹配结果统一给出三档处置：<code>decision = execute / choose / clarify</code>。
+置信度足够时直接执行；存在相近候选时返回候选列表供调用方点选；
+无法命中时追问一句，不再落入“其他”。</p>
+<p>同时补齐执行前校验（<code>llm/src/scenario_preflight.py</code>）：模板依赖的地图、
+参数名与参数取值范围在生成和播放前检查并给出建议。此前
+<code>generate_scenario_from_template</code> 会读取 <code>params_json</code> 却不生效，现已修正。</p>
+<p>实测：18 条口语样本（含繁体、全角、语气词、同义说法）全部命中预期模板；
+<code>不要加塞</code> 返回 <code>clarify</code>。</p>
+<h3 id="7-已知限制">7. 已知限制</h3>
+<ul>
+<li>否定过滤按词面就近判断，双重否定或跨句否定仍可能误判</li>
+<li>当前共 15 个模板，无法匹配时返回“未匹配”，不做猜测</li>
+<li>未显式传参时取参数区间下界（如制动目标速度默认为 0，即刹停）</li>
+</ul>
 <hr/>
 <h2 id="2026-11--openscenario-播放器增强位置解析--新条件--红绿灯--跟驰变道">2026-11 · OpenSCENARIO 播放器增强：位置解析 / 新条件 / 红绿灯 / 跟驰变道</h2>
 <p>这一版补齐了播放器（<code>llm/src/xosc_player.py</code>）长期缺失的能力，并新增了

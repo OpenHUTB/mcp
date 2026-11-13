@@ -65,11 +65,13 @@
 </li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="#3-12-个场景模板">3. 12 个场景模板</a>
+<li class="toctree-l2"><a class="reference internal" href="#3-15-个场景模板">3. 15 个场景模板</a>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#4-对话示例">4. 对话示例</a>
 <ul>
 <li class="toctree-l3"><a class="reference internal" href="#41-文字直达场景">4.1 文字直达场景</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#42-自然语言--模板--参数">4.2 自然语言 → 模板 + 参数</a>
 </li>
 </ul>
 </li>
@@ -213,7 +215,7 @@
 </tr>
 </tbody>
 </table>
-<h2 id="3-12-个场景模板">3. 12 个场景模板</h2>
+<h2 id="3-15-个场景模板">3. 15 个场景模板</h2>
 <table>
 <thead>
 <tr>
@@ -243,6 +245,12 @@
 <td>时间、时距、速度、到达</td>
 </tr>
 <tr>
+<td><code>cut_in_then_brake</code></td>
+<td>加塞后急刹</td>
+<td>3</td>
+<td>时间（变道、急刹分阶段）</td>
+</tr>
+<tr>
 <td><code>crossing_hazard</code></td>
 <td>行人/车辆横穿</td>
 <td>2</td>
@@ -262,9 +270,21 @@
 </tr>
 <tr>
 <td><code>unprotected_turn</code></td>
-<td>路口无保护通行</td>
+<td>路口无保护通行（需 Town10HD_Opt）</td>
 <td>3</td>
 <td>时间、距离</td>
+</tr>
+<tr>
+<td><code>merge_turn</code></td>
+<td>路口汇入转向（需 Town10HD_Opt）</td>
+<td>3</td>
+<td>时间、距离</td>
+</tr>
+<tr>
+<td><code>dense_lane_change</code></td>
+<td>三车道路段连续变道</td>
+<td>4</td>
+<td>时间</td>
 </tr>
 <tr>
 <td><code>junction_light</code></td>
@@ -316,6 +336,22 @@
 <p>还可以顺带指定截图时刻、时长与红灯时长：<code>IDM 跟驰，截图 6,12,15</code>、
 <code>红绿灯相位演示，红灯 8 秒</code>。模板名与按钮文字的完整对照见
 <a href="../new-features/#7-%E6%96%87%E5%AD%97%E7%9B%B4%E8%BE%BE%E5%9C%BA%E6%99%AF%E6%97%A0%E9%9C%80%E5%A4%A7%E6%A8%A1%E5%9E%8B">New Features 第 7 节</a>。</p>
+<h3 id="42-自然语言--模板--参数">4.2 自然语言 → 模板 + 参数</h3>
+<p>无法确定模板时，可先调用语义解析：</p>
+<div class="highlight"><pre><span></span><code><span class="n">plan_scenario</span><span class="p">(</span><span class="s2">"旁边车加塞到我前面后立刻急刹"</span><span class="p">)</span>
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><span class="p">{</span><span class="nt">"template"</span><span class="p">:</span><span class="w"> </span><span class="s2">"cut_in_then_brake"</span><span class="p">,</span><span class="w"> </span><span class="nt">"confidence"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.95</span><span class="p">,</span>
+<span class="w"> </span><span class="nt">"params"</span><span class="p">:</span><span class="w"> </span><span class="p">{},</span><span class="w"> </span><span class="nt">"required_map"</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="nt">"needs_clarification"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">}</span>
+</code></pre></div>
+<p><code>find_scenario_templates(query, top_k=3)</code> 额外返回候选及得分，用于判断是否存在歧义：</p>
+<div class="highlight"><pre><span></span><code>cut_in_then_brake  9.5
+cut_in             3.2
+lead_brake         2.5
+</code></pre></div>
+<p>输入会先归一化（繁体、全角、语气词、单位写法），再参与匹配；
+<code>decision</code> 取 <code>execute</code> / <code>choose</code> / <code>clarify</code>，分别表示直接执行、候选择一、追问澄清。</p>
+<p>槽位、加权与歧义判定的细节见
+<a href="../new-features/#2026-11--%E8%87%AA%E7%84%B6%E8%AF%AD%E8%A8%80%E5%9C%BA%E6%99%AF%E7%94%9F%E6%88%90">New Features</a>。</p>
 <h2 id="5-代码示例">5. 代码示例</h2>
 <h3 id="51-批量生成">5.1 批量生成</h3>
 <div class="highlight"><pre><span></span><code><span class="kn">from</span> <span class="nn">scenario_templates</span> <span class="kn">import</span> <span class="n">build</span>

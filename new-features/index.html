@@ -43,13 +43,27 @@
 <ul class="current">
 <li class="toctree-l1 current"><a class="reference internal current" href="#">New Features</a>
 <ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="#2026-11--运行危险度指标">2026-11 · 运行危险度指标</a>
+<ul>
+<li class="toctree-l3"><a class="reference internal" href="#1-指标口径">1. 指标口径</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#2-实现说明">2. 实现说明</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#3-效果">3. 效果</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#4-实测结果">4. 实测结果</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#5-注意事项">5. 注意事项</a>
+</li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="#2026-11--鬼探头场景与行人驱动">2026-11 · 鬼探头场景与行人驱动</a>
 <ul>
 <li class="toctree-l3"><a class="reference internal" href="#1-用法">1. 用法</a>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#2-场景编排">2. 场景编排</a>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#3-效果">3. 效果</a>
+<li class="toctree-l3"><a class="reference internal" href="#3-效果_1">3. 效果</a>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#4-修掉的两个问题">4. 修掉的两个问题</a>
 </li>
@@ -191,6 +205,91 @@
 <p>按时间倒序记录新增功能。每个功能都给出：<strong>能力说明、调用方式、示例、效果</strong>。</p>
 <p>图片全部使用绝对链接。</p>
 <hr/>
+<h2 id="2026-11--运行危险度指标">2026-11 · 运行危险度指标</h2>
+<p>场景回放此前只给截图和事件，能看出“发生了什么”，但看不出“危险到什么程度”。
+本版让播放器在结束时汇总五项指标，<code>summarize()</code> 与 <code>run_scenario_in_carla</code>
+直接给出：</p>
+<div class="highlight"><pre><span></span><code>危险度指标：
+   碰撞：无
+   最小中心距 3.80 m（t=5.65s，crosser）
+   最小 TTC 1.41 s（t=2.65s，crosser）
+   最大减速度 5.78 m/s²（t=3.65s）
+   自车末速 0.04 m/s（已停止）
+</code></pre></div>
+<h3 id="1-指标口径">1. 指标口径</h3>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th>口径</th>
+<th>用途</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>碰撞</td>
+<td>自车碰撞传感器上报，同一实体只记首次接触</td>
+<td>判定是否发生事故</td>
+</tr>
+<tr>
+<td>最小中心距</td>
+<td>自车与其余实体的最小中心距离</td>
+<td>衡量最近接近程度</td>
+</tr>
+<tr>
+<td>最小 TTC</td>
+<td>只统计自车前方实体：纵向距离 / 接近速度</td>
+<td>纵向冲突的紧迫度</td>
+</tr>
+<tr>
+<td>最大减速度</td>
+<td>帧间速度差，排除碰撞瞬间的跳变（&gt;20 m/s²）</td>
+<td>制动强度</td>
+</tr>
+<tr>
+<td>自车末速</td>
+<td>结束时的速度，并给出是否已停止</td>
+<td>场景是否收敛</td>
+</tr>
+</tbody>
+</table>
+<h3 id="2-实现说明">2. 实现说明</h3>
+<ul>
+<li>碰撞用 <code>sensor.other.collision</code> 挂在自车上，回调时间取当前播放时刻；
+  同一次接触会连续多帧上报，按实体去重</li>
+<li>其余指标逐帧求值取全程极值。TTC 只对自车前方（纵向投影 &gt; 0）且
+  接近速度 &gt; 0.5 m/s 的实体计算，横穿目标按其纵向距离计</li>
+<li>结果放在 <code>play()</code> 返回值的 <code>metrics</code> 字段，<code>summarize()</code> 负责排版，
+  MCP 工具层无需改动</li>
+</ul>
+<h3 id="3-效果">3. 效果</h3>
+<p><img alt="运行指标" src="../img/scenario_run_metrics.gif"/></p>
+<div align="center"><i>occluded_crossing：右上角实时显示自车速度、与行人的距离和 TTC，末帧汇总本次运行指标</i></div>
+<h3 id="4-实测结果">4. 实测结果</h3>
+<table>
+<thead>
+<tr>
+<th>场景</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>occluded_crossing</code></td>
+<td>无碰撞，最小中心距 3.80 m，最小 TTC 1.41 s，最大减速度 5.78 m/s²</td>
+</tr>
+<tr>
+<td><code>cut_in_then_brake</code></td>
+<td>t=7.35 s 与 <code>cutter</code> 碰撞，最小 TTC 0.43 s</td>
+</tr>
+</tbody>
+</table>
+<h3 id="5-注意事项">5. 注意事项</h3>
+<ul>
+<li>最小中心距是质心距离，不是车身间隙；行人等小目标建议结合画面判断</li>
+<li>无导航网格的生成路网里，行人被撞后会被推开，指标仍记录首次接触</li>
+</ul>
+<hr/>
 <h2 id="2026-11--鬼探头场景与行人驱动">2026-11 · 鬼探头场景与行人驱动</h2>
 <p>本版新增 <code>occluded_crossing</code> 模板（鬼探头），并修复横穿类场景的两个问题：
 横穿者出发点无效导致布景失败、行人在生成路网中不移动。</p>
@@ -234,7 +333,7 @@
 </table>
 <p>参数：<code>occluder_gap</code>（遮挡车距离）、<code>lateral</code>（行人横向距离）、
 <code>ped_speed</code>、<code>start_delay</code>、<code>ego_speed</code>，均可通过 <code>params_json</code> 覆盖。</p>
-<h3 id="3-效果">3. 效果</h3>
+<h3 id="3-效果_1">3. 效果</h3>
 <p><img alt="鬼探头" src="../img/scenario_occluded_crossing.gif"/></p>
 <div align="center"><i>occluded_crossing：自车制动停止，行人从遮挡车尾横穿（红圈为行人，12 帧，0.5 秒/帧）</i></div>
 <h3 id="4-修掉的两个问题">4. 修掉的两个问题</h3>

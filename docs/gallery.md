@@ -16,6 +16,9 @@ title: 效果展示
 ![鬼探头](img/scenario_occluded_crossing.gif)
 <div align="center"><i>occluded_crossing（鬼探头）播放 6 秒：自车制动停止，行人从遮挡车尾横穿（红圈为行人，12 帧，0.5 秒/帧；底部为口语输入与命中模板）</i></div>
 
+![运行指标](img/scenario_run_metrics.gif)
+<div align="center"><i>运行危险度指标：右上角实时显示自车速度、与行人距离与 TTC，末帧汇总碰撞/最小中心距/最小 TTC/最大减速度/末速</i></div>
+
 ## 2. 路网布局
 
 ![路网布局轮播](https://openhutb.github.io/mcp/img/road_layouts.gif)

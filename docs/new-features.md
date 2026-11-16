@@ -61,6 +61,73 @@ title: New Features
 
 ---
 
+## 2026-11 · 鬼探头场景与行人驱动
+
+本版新增 `occluded_crossing` 模板（鬼探头），并修复横穿类场景的两个问题：
+横穿者出发点无效导致布景失败、行人在生成路网中不移动。
+
+### 1. 用法
+
+```text
+路边停着的车后面突然窜出一个人
+公交车挡住视线，车头突然冒出个行人
+```
+
+语义层把 `鬼探头`、`遮挡横穿`、`盲区窜出`、`车后窜出`、`公交车遮挡`
+等说法路由到该模板；输入含"鬼探头"时额外加权，避免落到 `crossing_hazard`。
+
+```python
+plan_scenario("路边停着的车后面突然窜出一个人")
+# → {"template": "occluded_crossing", "confidence": 1.0, ...}
+```
+
+### 2. 场景编排
+
+本车道前方 35 m 停放一辆遮挡视线的车，行人从该车车尾后方 3.5 m 处起步横穿；
+自车匀速 8 m/s 接近，距横穿线 18 m 时线性制动至停止。
+
+| 时刻 | 事件 |
+|---|---|
+| 0 s | 自车开始匀速行驶 |
+| 1.5 s | 行人起步，向车道方向横穿 |
+| 距横穿线 18 m | 自车线性减速 |
+| — | 自车停在行人前方约 3 m |
+
+参数：`occluder_gap`（遮挡车距离）、`lateral`（行人横向距离）、
+`ped_speed`、`start_delay`、`ego_speed`，均可通过 `params_json` 覆盖。
+
+### 3. 效果
+
+![鬼探头](img/scenario_occluded_crossing.gif)
+<div align="center"><i>occluded_crossing：自车制动停止，行人从遮挡车尾横穿（红圈为行人，12 帧，0.5 秒/帧）</i></div>
+
+### 4. 修掉的两个问题
+
+1. **横穿者出发点无效**。原 `crossing_hazard` 把自车放在负车道弧长处，
+   OpenDRIVE 不接受负的 `s`，布景直接失败；同时行人朝向为 0°，
+   实际沿道路方向"平行"行走而非横穿。现改为自车从路段起点出发、
+   横穿点位于前方 `ego_offset` 米处，行人朝向按横穿方向设置。
+2. **行人在生成路网中不移动**。生成路网没有导航网格，
+   `controller.ai.walker` 的 `go_to_location` 持续报
+   `failed to set max speed`，挂上控制器后 `apply_control` 同样无效。
+   现改为逐帧下发 `WalkerControl`（速度 + 当前朝向），
+   实测位移与请求速度一致，不再需要速度补偿。
+
+### 5. 实测结果
+
+| 项目 | 结果 |
+|---|---|
+| 离线回归（16 个模板 + 新增条件） | 全部通过 |
+| CARLA 实跑（`wide_straight`） | 3 个实体、3 个事件全部触发，自车停于行人前约 3 m，无碰撞 |
+| 语义识别 | `鬼探头`、`公交车遮挡` 均命中 `occluded_crossing` |
+
+### 6. 已知限制
+
+- 行人在播放器里按固定朝向直线行走，不会绕开途中障碍物
+- 俯视截图中行人仅约 30 px 高，动图为便于辨认加了红圈标注
+
+---
+
 ## 2026-11 · 自然语言场景生成
 
 此前由大模型直接编写场景脚本，存在两类问题：生成的代码无法编译，或调用不存在的接口。
@@ -114,7 +181,7 @@ run_scenario_in_carla(template="cut_in_then_brake", xodr_layout="wide_straight")
 
 此外，`unprotected_turn` 调整为真实路口（北进口至东出口），并加入对向直行车辆。
 
-![加塞后急刹](../img/scenario_cut_in_then_brake.gif)
+![加塞后急刹](img/scenario_cut_in_then_brake.gif)
 <div align="center"><i>cut_in_then_brake：变道 → 急刹 → 追尾（画面顶部为口语输入与命中模板）</i></div>
 
 ### 4. 解决的问题
@@ -162,7 +229,7 @@ run_scenario_in_carla(template="cut_in_then_brake", xodr_layout="wide_straight")
 ### 7. 已知限制
 
 - 否定过滤按词面就近判断，双重否定或跨句否定仍可能误判
-- 当前共 15 个模板，无法匹配时返回“未匹配”，不做猜测
+- 当前共 16 个模板，无法匹配时返回“未匹配”，不做猜测
 - 未显式传参时取参数区间下界（如制动目标速度默认为 0，即刹停）
 
 ---

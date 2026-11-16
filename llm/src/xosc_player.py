@@ -1391,6 +1391,21 @@ def _dynamics_span(act: XoscAction) -> float:
 # =====================================================================
 # 播放
 # =====================================================================
+def _drive_walker(walker: Any, speed: float) -> None:
+    """按实体朝向驱动行人行走。
+
+    生成路网没有导航网格，controller.ai.walker 的 go_to_location 无法
+    寻路（NAV 持续报 "failed to set max speed"），因此直接用
+    WalkerControl 沿朝向走；速度由行走动画消化，实测位移与请求值一致。
+    """
+    ctrl = carla.WalkerControl()
+    if speed > 0.05:
+        fwd = walker.get_transform().get_forward_vector()
+        ctrl.speed = float(speed)
+        ctrl.direction = carla.Vector3D(x=fwd.x, y=fwd.y, z=0.0)
+    walker.apply_control(ctrl)
+
+
 def play(world: carla.World, scenario: XoscScenario,
          duration: Optional[float] = None,
          capture_at: Optional[List[float]] = None,
@@ -1416,6 +1431,8 @@ def play(world: carla.World, scenario: XoscScenario,
     world.apply_settings(settings)
 
     actors: Dict[str, carla.Actor] = {}
+    # 行人实体（WalkerControl 驱动，不走 vehicles 的恒速逻辑）
+    walkers: set = set()
     cams: List[Any] = []
     saved: List[str] = []
     applied: List[Dict[str, Any]] = []
@@ -1476,6 +1493,10 @@ def play(world: carla.World, scenario: XoscScenario,
                 actor.set_attribute("role_name", ent.name)
             except Exception:
                 pass
+
+            # 行人需要逐帧 WalkerControl 才会行走
+            if ent.kind == "pedestrian":
+                walkers.add(ent.name)
 
         if not actors:
             raise XoscPlayerError("没有任何实体成功布景")
@@ -1645,6 +1666,9 @@ def play(world: carla.World, scenario: XoscScenario,
 
             # --- 变道 / 偏移用转向控制，其余用恒速 ---
             for name, actor in actors.items():
+                if name in walkers:
+                    _drive_walker(actor, target_speed.get(name, 0.0))
+                    continue
                 if name in lane_change and not lane_change[name]["done"]:
                     lc = lane_change[name]
                     tgt = _lane_target(actor, lc["delta"],

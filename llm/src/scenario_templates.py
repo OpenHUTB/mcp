@@ -312,8 +312,9 @@ def build_occluded_crossing(p: Dict[str, Any]) -> ScenarioSpec:
     # 起步点放在遮挡车车尾后方 3.5 m：既不会被车身挡住，视觉上也像
     # "从车后突然走出"，同时留出足够纵向间距避免与停放车辆碰撞。
     cross_x = occluder_gap - 3.5
-    # 距横穿线 18 m 开始制动，停止点距行人约 3 m，既不撞人也不显得过远
-    brake_gap = 18.0
+    # 距横穿线 13 m 开始制动（8 m/s 线性 2 s 约需 8 m 制动距离），
+    # 停止点距行人约 5 m；截图密集时会多走几帧，仍不会贴上遮挡车。
+    brake_gap = 13.0
 
     return ScenarioSpec(
         name="occluded_crossing",

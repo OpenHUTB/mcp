@@ -1799,9 +1799,11 @@ def play(world: carla.World, scenario: XoscScenario,
                         cam.listen(q.put)
                         cams.append((cam, q))
 
-                        # 空转几帧让渲染稳定（与 capture_views 一致）
-                        for _ in range(6):
-                            world.tick()
+                        # 只推进一帧取图。多空转几帧虽然能让渲染更"稳"，
+                        # 但同步模式下每多 tick 一次，世界就多走一个 dt，
+                        # 而播放时钟 t 不变，截图密集时会把整段场景拉快
+                        # （实测 0.5 s 截一张的 18 s 场景多走了约 3 s）。
+                        world.tick()
                         frame = q.get(timeout=20)
                         snapshots.append({"t": round(t, 2), "actors": snap,
                                           "cam": (round(c0.x, 1), round(c0.y, 1),

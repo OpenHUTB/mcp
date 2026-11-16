@@ -43,7 +43,8 @@ def _veh(eid: str, s: float, speed: float = 10.0, lane: str = LANE_R,
                       carla_blueprint=blueprint or "vehicle.tesla.model3")
 
 
-def _ped(eid: str, x: float, y: float, speed: float = 1.4) -> EntitySpec:
+def _ped(eid: str, x: float, y: float, speed: float = 1.4,
+         h: float = 0.0) -> EntitySpec:
     return EntitySpec(id=eid, kind=EntityKind.PEDESTRIAN,
                       pedestrian_category=PedestrianCategory.PEDESTRIAN,
                       initial_speed=speed,
@@ -51,7 +52,7 @@ def _ped(eid: str, x: float, y: float, speed: float = 1.4) -> EntitySpec:
                       # 不能用车辆默认值
                       bounding_box=BoundingBoxSpec(length=0.6, width=0.6,
                                                    height=1.8, x=0.0, y=0.0, z=0.9),
-                      initial_position=PositionSpec.world(x, y, 0.0, 0.0),
+                      initial_position=PositionSpec.world(x, y, 0.0, h),
                       carla_blueprint="walker.pedestrian.0001")
 
 
@@ -255,38 +256,95 @@ def build_crossing_hazard(p: Dict[str, Any]) -> ScenarioSpec:
     duration = float(p.get("duration", 25.0))
 
     if crosser == "pedestrian":
-        cross_entity = _ped("crosser", 0.0, lateral, ped_speed)
+        # 行人朝向必须指向路中心（yaw=-90° 即 -y 方向），
+        # 默认 yaw=0 会沿道路方向"平行"行走，根本不会横穿。
+        cross_entity = _ped("crosser", ego_offset, lateral, ped_speed, h=-90.0)
         cross_beh = _speed("crosser", ped_speed, DynamicsShape.STEP, 0.0)
     else:
         cat = VehicleCategory.BICYCLE if crosser == "bicycle" else VehicleCategory.CAR
         cross_entity = EntitySpec(
             id="crosser", kind=EntityKind.VEHICLE, vehicle_category=cat,
             initial_speed=ped_speed if crosser == "bicycle" else 8.0,
-            initial_position=PositionSpec.world(0.0, lateral, 0.0, -90.0))
+            initial_position=PositionSpec.world(ego_offset, lateral, 0.0, -90.0))
         cross_beh = _speed("crosser", ped_speed if crosser == "bicycle" else 8.0,
                            DynamicsShape.STEP, 0.0)
 
     return ScenarioSpec(
         name="crossing_hazard_%s" % crosser,
         description="%s 从侧向 %.1fm 处横穿本车路径" % (crosser, lateral),
-        entities=[_veh("ego", -ego_offset, ego_speed, LANE_R), cross_entity],
+        # 车道弧长不能为负：自车从路网起点出发，横穿点位于前方 ego_offset 米
+        entities=[_veh("ego", 0.0, ego_speed, LANE_R), cross_entity],
         behaviors=[_speed("ego", ego_speed, DynamicsShape.STEP, 0.0), cross_beh],
         triggers=[
             TriggerSpec(kind=TriggerKind.TIME, value=0.0),
             # 横穿者先动
             TriggerSpec(kind=TriggerKind.DISTANCE, rule=Rule.LESS_THAN,
                         value=25.0,
-                        position=PositionSpec.world(0.0, lateral, 0.0, 0.0),
+                        position=PositionSpec.world(ego_offset, lateral, 0.0, 0.0),
                         triggering_entity="ego"),
             # ego 制动
             TriggerSpec(kind=TriggerKind.DISTANCE, rule=Rule.LESS_THAN,
                         value=12.0,
-                        position=PositionSpec.world(0.0, lateral, 0.0, 0.0),
+                        position=PositionSpec.world(ego_offset, lateral, 0.0, 0.0),
                         triggering_entity="ego"),
         ],
         duration=duration, template="crossing_hazard",
         params={"crosser": crosser, "lateral": lateral},
         tags=["横穿", "VRU", "路口"],
+    )
+
+
+# =====================================================================
+# 模板 4b：鬼探头（遮挡横穿）
+#   本车道前方停着一辆遮挡视线的车，行人从车头/路侧突然窜出横穿，
+#   自车只有很短的反应距离 —— 与 crossing_hazard 的区别是多了"遮挡物"，
+#   且横穿起点在路侧（右侧），更接近城市道路的真实危险场景。
+# =====================================================================
+def build_occluded_crossing(p: Dict[str, Any]) -> ScenarioSpec:
+    ego_speed = float(p.get("ego_speed", 8.0))
+    occluder_gap = float(p.get("occluder_gap", 35.0))
+    lateral = float(p.get("lateral", 3.5))
+    ped_speed = float(p.get("ped_speed", 1.4))
+    start_delay = float(p.get("start_delay", 2.0))
+    duration = float(p.get("duration", 25.0))
+
+    # 行人从另一侧路肩向本车道走，yaw=+90°（+y 方向）
+    # 起步点放在遮挡车车尾后方 3.5 m：既不会被车身挡住，视觉上也像
+    # "从车后突然走出"，同时留出足够纵向间距避免与停放车辆碰撞。
+    cross_x = occluder_gap - 3.5
+    # 距横穿线 18 m 开始制动，停止点距行人约 3 m，既不撞人也不显得过远
+    brake_gap = 18.0
+
+    return ScenarioSpec(
+        name="occluded_crossing",
+        description="前方 %.0fm 处有静止车辆遮挡，行人 %.1fs 后从车后横穿"
+                    % (occluder_gap, start_delay),
+        entities=[
+            _veh("ego", 0.0, ego_speed, LANE_R),
+            # 遮挡视线的静止车辆，与自车同车道
+            _veh("occluder", occluder_gap, 0.0, LANE_R),
+            _ped("crosser", cross_x, -lateral, 0.0, h=90.0),
+        ],
+        behaviors=[
+            _speed("ego", ego_speed, DynamicsShape.STEP, 0.0),
+            _speed("crosser", ped_speed, DynamicsShape.STEP, 0.0),
+            # 自车减速让行：2s 线性减到 0
+            _speed("ego", 0.0, DynamicsShape.LINEAR, 2.0),
+        ],
+        triggers=[
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0),
+            # 行人起步（自车已接近遮挡车，视觉上"突然窜出"）
+            TriggerSpec(kind=TriggerKind.TIME, value=start_delay),
+            # 距碰撞点 brake_gap 米时开始制动
+            TriggerSpec(kind=TriggerKind.DISTANCE, rule=Rule.LESS_THAN,
+                        value=brake_gap,
+                        position=PositionSpec.world(cross_x, 0.0, 0.0, 0.0),
+                        triggering_entity="ego"),
+        ],
+        duration=duration, template="occluded_crossing",
+        params={"occluder_gap": occluder_gap, "lateral": lateral,
+                "ped_speed": ped_speed},
+        tags=["横穿", "鬼探头", "VRU", "遮挡"],
     )
 
 
@@ -800,6 +858,7 @@ _BUILDERS: Dict[str, Callable[[Dict[str, Any]], ScenarioSpec]] = {
     "lead_brake": build_lead_brake,
     "lead_stationary": build_lead_stationary,
     "crossing_hazard": build_crossing_hazard,
+    "occluded_crossing": build_occluded_crossing,
     "low_overlap": build_low_overlap,
     "wrong_way": build_wrong_way,
     "unprotected_turn": build_unprotected_turn,
@@ -866,6 +925,22 @@ TEMPLATES: Dict[str, TemplateSpec] = {
             "lateral": ParamRange(kind="uniform", low=4.0, high=10.0, unit="m"),
             "ego_speed": ParamRange(kind="uniform", low=6.0, high=15.0, unit="m/s"),
             "ped_speed": ParamRange(kind="uniform", low=1.0, high=2.5, unit="m/s"),
+        }),
+    "occluded_crossing": TemplateSpec(
+        name="occluded_crossing", title="鬼探头（遮挡横穿）",
+        description="本车道前方有静止车辆遮挡，行人从车头/路侧突然窜出横穿",
+        carla_function="scenario_crossing_hazard",
+        tags=["横穿", "鬼探头", "VRU", "遮挡"],
+        params={
+            "occluder_gap": ParamRange(kind="uniform", low=35.0, high=55.0,
+                                       unit="m"),
+            "lateral": ParamRange(kind="uniform", low=3.5, high=5.0, unit="m"),
+            "ego_speed": ParamRange(kind="uniform", low=8.0, high=12.0,
+                                    unit="m/s"),
+            "ped_speed": ParamRange(kind="uniform", low=1.2, high=1.8,
+                                    unit="m/s"),
+            "start_delay": ParamRange(kind="uniform", low=1.5, high=3.0,
+                                      unit="s"),
         }),
     "low_overlap": TemplateSpec(
         name="low_overlap", title="低重叠碰撞",

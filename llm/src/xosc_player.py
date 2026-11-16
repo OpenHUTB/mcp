@@ -1438,6 +1438,13 @@ def play(world: carla.World, scenario: XoscScenario,
     applied: List[Dict[str, Any]] = []
     errors: List[str] = []
     snapshots: List[Dict[str, Any]] = []
+    # 危险度指标：碰撞、最小中心距、最小 TTC、最大减速度、末速
+    metrics: Dict[str, Any] = {
+        "collisions": [], "min_gap": None, "min_ttc": None,
+        "max_decel": None, "ego_final_speed": None, "ego_stopped": None,
+    }
+    clock = {"t": 0.0}
+    col_sensor = None
 
     # 每个实体的目标速度（保持用）
     target_speed: Dict[str, float] = {}
@@ -1505,6 +1512,35 @@ def play(world: carla.World, scenario: XoscScenario,
         # 否则 t=0 求值条件时会读到未初始化的位置（StopTrigger 会被误判为已满足）。
         world.tick()
 
+        # 碰撞传感器挂在自车上：碰撞回调的时间取自当前播放时刻
+        ego_actor0 = actors.get("ego")
+        if ego_actor0 is not None and ego_actor0.type_id.startswith("vehicle."):
+            try:
+                col_bp = bps.find("sensor.other.collision")
+                col_sensor = world.try_spawn_actor(
+                    col_bp, carla.Transform(), attach_to=ego_actor0)
+                if col_sensor is not None:
+                    def _on_collision(event, _m=metrics, _c=clock,
+                                      _a=actors):
+                        other = getattr(event, "other_actor", None)
+                        name = ""
+                        if other is not None:
+                            name = next((k for k, v in _a.items()
+                                         if v.id == other.id), "")
+                            if not name:
+                                name = (other.attributes.get("role_name", "")
+                                        or other.type_id)
+                        # 同一次接触会连续多帧上报，同一实体只记首次
+                        for c in _m["collisions"]:
+                            if c["other"] == name:
+                                c["count"] = c.get("count", 1) + 1
+                                return
+                        _m["collisions"].append(
+                            {"t": round(_c["t"], 2), "other": name})
+                    col_sensor.listen(_on_collision)
+            except Exception as e:
+                errors.append("碰撞传感器创建失败: %s" % e)
+
         # 2) 相机模板（每次截图时重新创建，见下方 capture 逻辑）
         cam_bp = None
         if out_dir and capture_at:
@@ -1523,9 +1559,11 @@ def play(world: carla.World, scenario: XoscScenario,
                                 if e.name in actors), "")
         stop_reason = "duration"
         ended_at = dur
+        prev_v: Optional[float] = None
 
         for step in range(steps + 1):
             t = step * dt
+            clock["t"] = t
 
             # --- 触发 ---
             for ev in scenario.events:
@@ -1752,6 +1790,48 @@ def play(world: carla.World, scenario: XoscScenario,
                     actor.enable_constant_velocity(
                         carla.Vector3D(x=v, y=0.0, z=0.0))
 
+            # --- 危险度指标（取当前帧状态）---
+            ego_now = actors.get("ego")
+            if ego_now is not None and ego_now.is_alive:
+                v_ego = _speed_of(ego_now)
+                if prev_v is not None:
+                    dec = (prev_v - v_ego) / dt
+                    # 碰撞瞬间速度会跳变，超过 20 m/s² 的读数不计入减速度
+                    if 0.05 < dec <= 20.0 and (metrics["max_decel"] is None or
+                                               dec > metrics["max_decel"]["value"]):
+                        metrics["max_decel"] = {"value": round(dec, 2),
+                                                "t": round(t, 2)}
+                prev_v = v_ego
+
+                tf_e = ego_now.get_transform()
+                fwd = tf_e.get_forward_vector()
+                for nm, other in actors.items():
+                    if other is ego_now or not other.is_alive:
+                        continue
+                    tf_o = other.get_transform()
+                    dx = tf_o.location.x - tf_e.location.x
+                    dy = tf_o.location.y - tf_e.location.y
+                    gap = math.hypot(dx, dy)
+                    if (metrics["min_gap"] is None or
+                            gap < metrics["min_gap"]["value"]):
+                        metrics["min_gap"] = {"value": round(gap, 2),
+                                              "t": round(t, 2),
+                                              "entity": nm}
+                    # TTC 只统计自车前方的实体：纵向距离 / 接近速度
+                    lon = dx * fwd.x + dy * fwd.y
+                    if lon <= 0.0:
+                        continue
+                    ofwd = tf_o.get_forward_vector()
+                    closing = v_ego - _speed_of(other) * (
+                        ofwd.x * fwd.x + ofwd.y * fwd.y)
+                    if closing > 0.5:
+                        ttc = lon / closing
+                        if (metrics["min_ttc"] is None or
+                                ttc < metrics["min_ttc"]["value"]):
+                            metrics["min_ttc"] = {"value": round(ttc, 2),
+                                                  "t": round(t, 2),
+                                                  "entity": nm}
+
             # --- 截图 ---
             while cap_idx < len(capture_at) and capture_at[cap_idx] <= t + 1e-6:
                 if cam_bp is not None:
@@ -1854,7 +1934,18 @@ def play(world: carla.World, scenario: XoscScenario,
 
             world.tick()
 
+        ego_last = actors.get("ego")
+        if ego_last is not None and ego_last.is_alive:
+            metrics["ego_final_speed"] = round(_speed_of(ego_last), 2)
+            metrics["ego_stopped"] = metrics["ego_final_speed"] < 0.3
+
     finally:
+        if col_sensor is not None:
+            try:
+                col_sensor.stop()
+                col_sensor.destroy()
+            except Exception:
+                pass
         for a in actors.values():
             try:
                 if hasattr(a, "disable_constant_velocity"):
@@ -1892,6 +1983,7 @@ def play(world: carla.World, scenario: XoscScenario,
         "errors": errors,
         "images": saved,
         "snapshots": snapshots,
+        "metrics": metrics,
     }
 
 
@@ -1916,6 +2008,30 @@ def summarize(result: Dict[str, Any]) -> str:
         lines.append("未执行（超出播放器范围）：")
         for u in result["unsupported"][:8]:
             lines.append("   - %s" % u)
+    m = result.get("metrics") or {}
+    if m:
+        lines.append("危险度指标：")
+        if m.get("collisions"):
+            for c in m["collisions"][:5]:
+                lines.append("   碰撞 t=%.2fs 与 %s" % (c["t"], c["other"]))
+        else:
+            lines.append("   碰撞：无")
+        if m.get("min_gap"):
+            g = m["min_gap"]
+            lines.append("   最小中心距 %.2f m（t=%.2fs，%s）"
+                         % (g["value"], g["t"], g["entity"]))
+        if m.get("min_ttc"):
+            x = m["min_ttc"]
+            lines.append("   最小 TTC %.2f s（t=%.2fs，%s）"
+                         % (x["value"], x["t"], x["entity"]))
+        if m.get("max_decel"):
+            d = m["max_decel"]
+            lines.append("   最大减速度 %.2f m/s²（t=%.2fs）"
+                         % (d["value"], d["t"]))
+        if m.get("ego_final_speed") is not None:
+            lines.append("   自车末速 %.2f m/s（%s）"
+                         % (m["ego_final_speed"],
+                            "已停止" if m.get("ego_stopped") else "仍在行驶"))
     if result["errors"]:
         lines.append("错误：")
         for e in result["errors"][:8]:

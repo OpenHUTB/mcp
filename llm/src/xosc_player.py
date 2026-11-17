@@ -1335,19 +1335,27 @@ def _lane_target(actor, delta: int, lookahead: float = 8.0,
         return None
 
 
-def _align_to_lane(actor) -> None:
+def _align_to_lane(actor, fallback_yaw: Optional[float] = None) -> None:
     """把车头对齐到当前车道方向（变道收尾用）。
 
     变道靠纯追踪转向，结束时车身通常还带着十几度偏角；之后切回恒速，
     这个偏角会一直保持，车会斜着漂出车道。
+
+    借对向车道超车时，车所在车道的名义朝向与行驶方向相差 180°；
+    此时按 fallback_yaw（变道前的行驶方向）对齐，避免收尾时掉头。
     """
     try:
         tf = actor.get_transform()
         wp = actor.get_world().get_map().get_waypoint(tf.location)
         if wp is None:
             return
+        yaw = wp.transform.rotation.yaw
+        if fallback_yaw is not None:
+            diff = (yaw - fallback_yaw + 180.0) % 360.0 - 180.0
+            if abs(diff) > 90.0:
+                yaw = fallback_yaw
         actor.set_transform(carla.Transform(
-            tf.location, carla.Rotation(yaw=wp.transform.rotation.yaw)))
+            tf.location, carla.Rotation(yaw=yaw)))
     except Exception:
         pass
 
@@ -1617,6 +1625,9 @@ def play(world: carla.World, scenario: XoscScenario,
                             "until": t + max(act.dynamics_value, 1.0),
                             "speed": target_speed.get(ev.entity, 8.0),
                             "done": False,
+                            # 借对向车道超车时，目标车道的名义朝向与自车
+                            # 相反；收尾对齐要保留原行驶方向，否则会掉头。
+                            "yaw": actor.get_transform().rotation.yaw,
                             "road_id": wp0.road_id if wp0 is not None else None,
                             "lane_id": lane0.lane_id if lane0 is not None else None,
                         }
@@ -1719,7 +1730,7 @@ def play(world: carla.World, scenario: XoscScenario,
                         _drive_towards(actor, tgt, lc["speed"], _speed_of(actor),
                                        max_lat_acc=3.0)
                         if t >= lc["until"]:
-                            _align_to_lane(actor)
+                            _align_to_lane(actor, fallback_yaw=lc.get("yaw"))
                             lc["done"] = True
                             # 变道结束后保持在目标车道内：
                             # 若退回恒速，残余偏角会让车斜着漂出车道。

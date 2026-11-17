@@ -35,11 +35,12 @@ LANE_ONCOMING = "1"  # 对向车道（正号）
 
 
 def _veh(eid: str, s: float, speed: float = 10.0, lane: str = LANE_R,
-         blueprint: str = None) -> EntitySpec:
+         blueprint: str = None, road_id: str = "1") -> EntitySpec:
     return EntitySpec(id=eid, kind=EntityKind.VEHICLE,
                       vehicle_category=VehicleCategory.CAR,
                       initial_speed=speed,
-                      initial_position=PositionSpec.lane(s=s, lane_id=lane),
+                      initial_position=PositionSpec.lane(
+                          s=s, lane_id=lane, road_id=road_id),
                       carla_blueprint=blueprint or "vehicle.tesla.model3")
 
 
@@ -172,6 +173,71 @@ def build_cut_in_then_brake(p: Dict[str, Any]) -> ScenarioSpec:
         params={"gap": gap, "delay": delay, "cutter_speed": cutter_speed,
                 "brake_speed": brake_speed, "ego_speed": ego_speed},
         tags=["危险", "变道", "急刹", "多阶段"],
+    )
+
+
+# =====================================================================
+# 模板 1c：前车切出遇静止车辆
+#   前车（lead）在本车道前方，随后变道让出本车道，露出正前方一辆
+#   静止车辆（stopped）；自车按相对距离制动。对应 AEB 的 cut-out 测试。
+# =====================================================================
+def build_cut_out(p: Dict[str, Any]) -> ScenarioSpec:
+    s0 = float(p.get("s0", 50.0))
+    road_id = str(p.get("road_id", "1"))
+    lane = str(p.get("lane", LANE_R))
+    ego_speed = float(p.get("ego_speed", 12.0))
+    lead_speed = float(p.get("lead_speed", 9.0))
+    lead_gap = float(p.get("lead_gap", 28.0))
+    stopped_gap = float(p.get("stopped_gap", 36.0))
+    lc_delay = float(p.get("lc_delay", 2.5))
+    lc_time = float(p.get("lc_time", 1.6))
+    brake_gap = float(p.get("brake_gap", 30.0))
+    brake_time = float(p.get("brake_time", 3.0))
+    duration = float(p.get("duration", 12.0))
+
+    def _named(b: BehaviorSpec, name: str) -> BehaviorSpec:
+        b.name = name
+        return b
+
+    # 前车向右变道（-1）让出本车道；静止车停在本车道更前方。
+    # 自车在距静止车 brake_gap 时线性制动到 0，作为 AEB 的接管动作。
+    # road_id / lane 可在城市地图上指定具体路段（需同向至少两条车道）。
+    return ScenarioSpec(
+        name="cut_out",
+        description="前车在 %.1fs 后变道让出本车道，露出前方 %.0fm 处静止车辆，"
+                    "自车在 %.0fm 处制动" % (lc_delay, stopped_gap, brake_gap),
+        entities=[_veh("ego", s0, ego_speed, lane, road_id=road_id),
+                  _veh("lead", s0 + lead_gap, lead_speed, lane,
+                       road_id=road_id),
+                  _veh("stopped", s0 + lead_gap + stopped_gap, 0.0, lane,
+                       road_id=road_id)],
+        behaviors=[
+            _named(_speed("ego", ego_speed, DynamicsShape.STEP, 0.0),
+                   "ego_cruise"),
+            _named(_speed("lead", lead_speed, DynamicsShape.STEP, 0.0),
+                   "lead_cruise"),
+            _named(_speed("stopped", 0.0, DynamicsShape.STEP, 0.0),
+                   "stopped_hold"),
+            _named(_lane_change("lead", -1, lc_time), "lead_cut_out"),
+            _named(_speed("ego", 0.0, DynamicsShape.LINEAR, brake_time),
+                   "ego_brake"),
+        ],
+        triggers=[
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0, name="start"),
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0, name="lead_start"),
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0, name="stopped_start"),
+            TriggerSpec(kind=TriggerKind.TIME, value=lc_delay,
+                        name="begin_cut_out"),
+            TriggerSpec(kind=TriggerKind.RELATIVE_DISTANCE, rule=Rule.LESS_THAN,
+                        value=brake_gap, entity_ref="stopped",
+                        triggering_entity="ego", name="stopped_close"),
+        ],
+        duration=duration, template="cut_out",
+        params={"s0": s0, "road_id": road_id, "lane": lane,
+                "ego_speed": ego_speed, "lead_speed": lead_speed,
+                "lead_gap": lead_gap, "stopped_gap": stopped_gap,
+                "lc_delay": lc_delay, "brake_gap": brake_gap},
+        tags=["前车切出", "静止障碍", "AEB", "cut-out"],
     )
 
 
@@ -922,6 +988,7 @@ def build_signal_phase(p: Dict[str, Any]) -> ScenarioSpec:
 _BUILDERS: Dict[str, Callable[[Dict[str, Any]], ScenarioSpec]] = {
     "cut_in": build_cut_in,
     "cut_in_then_brake": build_cut_in_then_brake,
+    "cut_out": build_cut_out,
     "lead_brake": build_lead_brake,
     "lead_stationary": build_lead_stationary,
     "crossing_hazard": build_crossing_hazard,
@@ -964,6 +1031,26 @@ TEMPLATES: Dict[str, TemplateSpec] = {
                                       unit="m/s"),
             "ego_speed": ParamRange(kind="uniform", low=8.0, high=16.0,
                                     unit="m/s"),
+        }),
+    "cut_out": TemplateSpec(
+        name="cut_out", title="前车切出遇静止车辆",
+        description="前车变道让出本车道，露出前方静止车辆，自车按距离制动",
+        carla_function="scenario_lead_vehicle", tags=["前车切出", "静止障碍", "AEB"],
+        params={
+            "s0": ParamRange(kind="uniform", low=20.0, high=80.0, unit="m"),
+            "road_id": ParamRange(kind="string", value="1"),
+            "lane": ParamRange(kind="choice", choices=["-1", "-2"]),
+            "ego_speed": ParamRange(kind="uniform", low=11.0, high=15.0,
+                                    unit="m/s"),
+            "lead_speed": ParamRange(kind="uniform", low=8.0, high=11.0,
+                                     unit="m/s"),
+            "lead_gap": ParamRange(kind="uniform", low=24.0, high=32.0,
+                                   unit="m"),
+            "stopped_gap": ParamRange(kind="uniform", low=32.0, high=42.0,
+                                      unit="m"),
+            "lc_delay": ParamRange(kind="uniform", low=2.0, high=3.0, unit="s"),
+            "brake_gap": ParamRange(kind="uniform", low=26.0, high=34.0,
+                                    unit="m"),
         }),
     "lead_brake": TemplateSpec(
         name="lead_brake", title="前车急刹",

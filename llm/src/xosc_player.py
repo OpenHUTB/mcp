@@ -1300,15 +1300,45 @@ def keep_lateral(actor, other, target: float, speed: float) -> None:
                                              brake=brake))
 
 
+def _lane_at(world, road_id, s: float, loc):
+    """在 (road, s) 处按车道中心与车辆的实际横向距离判定所在车道。
+
+    CARLA 的部分城市路段上 ``get_waypoint(location)`` 会把车辆识别到相邻
+    车道（实测 Town03 road 67 的 +1 车道中心返回 +2），直接拿它的
+    ``get_left_lane`` 会指向本车道，变道动作因此无效。
+    """
+    cmap = world.get_map()
+    best, best_d = None, 1e9
+    for lid in range(-4, 5):
+        if lid == 0:
+            continue
+        w = cmap.get_waypoint_xodr(int(float(road_id)), lid, s)
+        if w is None:
+            continue
+        d = w.transform.location.distance(loc)
+        if d < best_d:
+            best, best_d = w, d
+    return best
+
+
 def _lane_target(actor, delta: int, lookahead: float = 8.0,
                  road_id: Optional[int] = None,
-                 lane_id: Optional[int] = None
+                 lane_id: Optional[int] = None,
+                 look_back: bool = False
                  ) -> Optional[carla.Location]:
     """取相邻车道上、前方 lookahead 米处的位置。
 
     给定 ``road_id`` / ``lane_id`` 时按**固定的目标车道**取点。变道过程中
     车辆当前所在车道会从原车道切到目标车道，如果每帧都重新找"相邻车道"，
     目标会再往外跳一条，车就会连续跨两条车道（实测横向偏出 5.1 m）。
+
+    ``look_back`` 表示沿目标车道**反向**取点：对向车借道时其行驶方向与
+    目标车道名义方向相反，必须用 ``previous`` 取点；否则前瞻点落在车后
+    （fx < 0），纯追踪转向量恒为 0，车不会并入目标车道。
+
+    目标点按 ``(roadId, laneId, 当前站号)`` 解析，而不是用车辆位置反查
+    车道：部分城市路段 ``get_waypoint(location)`` 会误判到相邻车道
+    （实测 Town03 road 67 上 +1 车道中心被识别为 +2）。
     """
     try:
         world = actor.get_world()
@@ -1316,11 +1346,15 @@ def _lane_target(actor, delta: int, lookahead: float = 8.0,
         if wp is None:
             return None
         if road_id is not None and lane_id is not None:
-            tgt = world.get_map().get_waypoint_xodr(
-                road_id, lane_id, wp.s + lookahead)
-            if tgt is None:
-                tgt = world.get_map().get_waypoint_xodr(road_id, lane_id, wp.s)
-            return tgt.transform.location if tgt is not None else None
+            lane = world.get_map().get_waypoint_xodr(
+                int(float(road_id)), int(float(lane_id)), wp.s)
+            if lane is None:
+                return None
+            ahead = (lane.previous(lookahead) if look_back
+                     else lane.next(lookahead))
+            if ahead:
+                return ahead[0].transform.location
+            return lane.transform.location
         if delta > 0:
             lane = wp.get_left_lane()
         else:
@@ -1616,10 +1650,24 @@ def play(world: carla.World, scenario: XoscScenario,
                         # 选"相邻车道"导致跨两条车道。
                         wp0 = world.get_map().get_waypoint(
                             actor.get_transform().location)
-                        lane0 = None
+                        cur = None
                         if wp0 is not None:
-                            lane0 = (wp0.get_left_lane() if delta > 0
-                                     else wp0.get_right_lane())
+                            cur = _lane_at(world, wp0.road_id, wp0.s,
+                                           actor.get_transform().location)
+                            if cur is None:
+                                cur = wp0
+                        lane0 = None
+                        if cur is not None:
+                            lane0 = (cur.get_left_lane() if delta > 0
+                                     else cur.get_right_lane())
+                        # 目标点沿车道名义方向还是反向取：负号车道名义朝
+                        # +s，正号车道名义朝 -s；车若逆行（如对向车借道），
+                        # 前瞻点要沿车道反向取，否则目标落在车后。
+                        look_back = False
+                        if lane0 is not None:
+                            lf = lane0.transform.get_forward_vector()
+                            af = actor.get_transform().get_forward_vector()
+                            look_back = (lf.x * af.x + lf.y * af.y) < 0
                         lane_change[ev.entity] = {
                             "delta": delta,
                             "until": t + max(act.dynamics_value, 1.0),
@@ -1628,8 +1676,9 @@ def play(world: carla.World, scenario: XoscScenario,
                             # 借对向车道超车时，目标车道的名义朝向与自车
                             # 相反；收尾对齐要保留原行驶方向，否则会掉头。
                             "yaw": actor.get_transform().rotation.yaw,
-                            "road_id": wp0.road_id if wp0 is not None else None,
+                            "road_id": cur.road_id if cur is not None else None,
                             "lane_id": lane0.lane_id if lane0 is not None else None,
+                            "back": look_back,
                         }
                     elif act.kind == "lane_offset":
                         lane_off[ev.entity] = {
@@ -1722,7 +1771,8 @@ def play(world: carla.World, scenario: XoscScenario,
                     lc = lane_change[name]
                     tgt = _lane_target(actor, lc["delta"],
                                        road_id=lc["road_id"],
-                                       lane_id=lc["lane_id"])
+                                       lane_id=lc["lane_id"],
+                                       look_back=lc.get("back", False))
                     if tgt is None:
                         errors.append("%s 找不到相邻车道" % name)
                         lc["done"] = True
@@ -1736,7 +1786,8 @@ def play(world: carla.World, scenario: XoscScenario,
                             # 若退回恒速，残余偏角会让车斜着漂出车道。
                             if lc["lane_id"] is not None:
                                 lane_hold[name] = {"road_id": lc["road_id"],
-                                                   "lane_id": lc["lane_id"]}
+                                                   "lane_id": lc["lane_id"],
+                                                   "back": lc.get("back", False)}
                     continue
                 if name in lane_off and not lane_off[name]["done"]:
                     lo = lane_off[name]
@@ -1787,7 +1838,8 @@ def play(world: carla.World, scenario: XoscScenario,
                 if name in lane_hold and actor.type_id.startswith("vehicle."):
                     lh = lane_hold[name]
                     tgt = _lane_target(actor, 0, road_id=lh["road_id"],
-                                       lane_id=lh["lane_id"])
+                                       lane_id=lh["lane_id"],
+                                       look_back=lh.get("back", False))
                     if tgt is not None:
                         _drive_towards(actor, tgt, target_speed.get(name, 0.0),
                                        _speed_of(actor))

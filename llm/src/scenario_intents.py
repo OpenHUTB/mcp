@@ -103,6 +103,14 @@ INTENTS: Dict[str, Dict[str, Any]] = {
         "examples": ["借对向车道超车时对面有车驶来，只好放弃超车",
                      "超车到一半发现对向来车，赶紧回到原车道"],
     },
+    "oncoming_intrusion": {
+        "aliases": ["对向车借道", "对向借道侵入", "对向车侵入", "对向车占道",
+                    "对面车占道", "迎面占道", "越过中心线", "越线迎面",
+                    "对向车跑到我车道", "对向车迎面驶来", "迎面对撞风险",
+                    "占了我的车道", "占我车道", "对面来车占道"],
+        "examples": ["对向车借道超车，越过中心线朝我迎面开过来",
+                     "对面来车占了我的车道，只能紧急刹车"],
+    },
     "signal_phase": {
         "aliases": ["红绿灯", "信号配时", "绿灯起步", "黄灯", "红灯停车",
                     "信号灯变化"],
@@ -143,6 +151,12 @@ _BOOSTS = [
     (("超车", "对向"), "overtake_oncoming", 8.0),
     (("超车", "来车"), "overtake_oncoming", 6.0),
     (("借道", "对向"), "overtake_oncoming", 6.0),
+    (("对向车", "借道"), "oncoming_intrusion", 8.0),
+    (("对向车", "占道"), "oncoming_intrusion", 8.0),
+    (("越过", "中心线"), "oncoming_intrusion", 8.0),
+    (("迎面", "占道"), "oncoming_intrusion", 8.0),
+    (("对向车", "本车道"), "oncoming_intrusion", 6.0),
+    (("占", "车道"), "oncoming_intrusion", 6.0),
     (("闯红灯",), "junction_light", 6.0),
     (("左转",), "unprotected_turn", 3.0),
     (("汇入",), "merge_turn", 3.0),
@@ -152,6 +166,7 @@ _BOOSTS = [
 _REQUIRED_MAP = {
     "unprotected_turn": "Town10HD_Opt",
     "merge_turn": "Town10HD_Opt",
+    "oncoming_intrusion": "Town03",
 }
 
 _CN_NUM = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,

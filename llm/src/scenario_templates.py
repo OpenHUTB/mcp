@@ -884,6 +884,92 @@ def build_overtake_oncoming(p: Dict[str, Any]) -> ScenarioSpec:
 
 
 # =====================================================================
+# 模板 10c：对向车借道侵入本车道（城市双向路）
+#   自车在城市双向路上正常行驶；对向车道的来车为超越同向慢车，越过
+#   中心线驶入自车车道，形成迎面冲突。自车制动停车，来车在临近时
+#   放弃借道、退回原车道。
+#   Town03 road 67 从 s≈174 起有 136m 直线无路口，两个方向各有车道。
+# =====================================================================
+def build_oncoming_intrusion(p: Dict[str, Any]) -> ScenarioSpec:
+    s0 = float(p.get("s0", 174.0))
+    road_id = str(p.get("road_id", "67"))
+    lane = str(p.get("lane", LANE_R))
+    ego_speed = float(p.get("ego_speed", 12.0))
+    slow_speed = float(p.get("slow_speed", 6.0))
+    slow_gap = float(p.get("slow_gap", 45.0))
+    oncoming_speed = float(p.get("oncoming_speed", 12.0))
+    oncoming_gap = float(p.get("oncoming_gap", 95.0))
+    lc_delay = float(p.get("lc_delay", 0.5))
+    lc_time = float(p.get("lc_time", 1.2))
+    brake_gap = float(p.get("brake_gap", 70.0))
+    brake_time = float(p.get("brake_time", 2.5))
+    abort_gap = float(p.get("abort_gap", 45.0))
+    abort_time = float(p.get("abort_time", 1.2))
+    abort_speed = float(p.get("abort_speed", 5.0))
+    duration = float(p.get("duration", 10.0))
+
+    def _named(b: BehaviorSpec, name: str) -> BehaviorSpec:
+        b.name = name
+        return b
+
+    # slow 在对向车道（+1）内朝自车驶来，oncoming 在其后方更远处；
+    # oncoming 变道进入自车车道时，其在 OpenDRIVE 中 s 减小、车头朝
+    # 自车。lane_change 的 delta 取 +1：+1 车道的左邻车道即本车道 -1，
+    # 退回时 -1 的左邻车道又是 +1，两个方向都用 +1。
+    return ScenarioSpec(
+        name="oncoming_intrusion",
+        description="对向车借道超越慢车，越过中心线迎面驶入本车道，"
+                    "自车在 %.0fm 处制动，来车在 %.0fm 处退回原车道"
+                    % (brake_gap, abort_gap),
+        entities=[_veh("ego", s0, ego_speed, lane, road_id=road_id),
+                  _veh("slow", s0 + slow_gap, slow_speed, LANE_ONCOMING,
+                       road_id=road_id),
+                  _veh("oncoming", s0 + oncoming_gap, oncoming_speed,
+                       LANE_ONCOMING, road_id=road_id)],
+        behaviors=[
+            _named(_speed("ego", ego_speed, DynamicsShape.STEP, 0.0),
+                   "ego_cruise"),
+            _named(_speed("slow", slow_speed, DynamicsShape.STEP, 0.0),
+                   "slow_cruise"),
+            _named(_speed("oncoming", oncoming_speed, DynamicsShape.STEP, 0.0),
+                   "oncoming_cruise"),
+            _named(_lane_change("oncoming", +1, lc_time),
+                   "oncoming_intrude"),
+            _named(_speed("ego", 0.0, DynamicsShape.LINEAR, brake_time),
+                   "ego_brake"),
+            _named(_lane_change("oncoming", +1, abort_time),
+                   "oncoming_abort"),
+            _named(_speed("oncoming", abort_speed, DynamicsShape.LINEAR, 2.0),
+                   "oncoming_slow"),
+        ],
+        triggers=[
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0, name="start"),
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0, name="slow_start"),
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0, name="oncoming_start"),
+            TriggerSpec(kind=TriggerKind.TIME, value=lc_delay,
+                        name="begin_intrusion"),
+            TriggerSpec(kind=TriggerKind.RELATIVE_DISTANCE, rule=Rule.LESS_THAN,
+                        value=brake_gap, entity_ref="oncoming",
+                        triggering_entity="ego", name="ego_brake_trigger"),
+            TriggerSpec(kind=TriggerKind.RELATIVE_DISTANCE, rule=Rule.LESS_THAN,
+                        value=abort_gap, entity_ref="oncoming",
+                        triggering_entity="ego", name="abort_trigger"),
+            TriggerSpec(kind=TriggerKind.RELATIVE_DISTANCE, rule=Rule.LESS_THAN,
+                        value=abort_gap, entity_ref="oncoming",
+                        triggering_entity="ego", name="abort_slow_trigger"),
+        ],
+        duration=duration, template="oncoming_intrusion",
+        params={"s0": s0, "road_id": road_id, "lane": lane,
+                "ego_speed": ego_speed, "slow_speed": slow_speed,
+                "slow_gap": slow_gap, "oncoming_speed": oncoming_speed,
+                "oncoming_gap": oncoming_gap, "lc_delay": lc_delay,
+                "brake_gap": brake_gap, "abort_gap": abort_gap,
+                "abort_time": abort_time},
+        tags=["对向借道", "迎面冲突", "城市道路", "制动"],
+    )
+
+
+# =====================================================================
 # 模板 11：紧急避让（轨迹跟随）
 #   前方本车道有静止障碍，自车按一条 S 形轨迹换道绕行。
 #   用 FollowTrajectoryAction 表达任意形状的避让路径。
@@ -1002,6 +1088,7 @@ _BUILDERS: Dict[str, Callable[[Dict[str, Any]], ScenarioSpec]] = {
     "close_follow": build_close_follow,
     "overtake": build_overtake,
     "overtake_oncoming": build_overtake_oncoming,
+    "oncoming_intrusion": build_oncoming_intrusion,
     "evasive_swerve": build_evasive_swerve,
     "signal_phase": build_signal_phase,
 }
@@ -1207,6 +1294,35 @@ TEMPLATES: Dict[str, TemplateSpec] = {
             "lc_delay": ParamRange(kind="uniform", low=1.5, high=2.5, unit="s"),
             "abort_gap": ParamRange(kind="uniform", low=55.0, high=70.0,
                                     unit="m"),
+        }),
+    "oncoming_intrusion": TemplateSpec(
+        name="oncoming_intrusion", title="对向借道侵入本车道",
+        description="对向车借道超车越过中心线迎面驶来，自车制动、来车退回"
+                    "（Town03 road 67 城市双向路段）",
+        carla_function="scenario_wrong_way", tags=["对向借道", "迎面冲突", "城市"],
+        required_map="Town03",
+        params={
+            # 174 起为 136m 直线段（s<170 处道路开始转弯，自车恒速会偏出
+            # 本车道），终点距下一路口仍有余量。
+            "s0": ParamRange(kind="fixed", value=174.0, unit="m"),
+            "road_id": ParamRange(kind="string", value="67"),
+            "lane": ParamRange(kind="choice", choices=["-1"]),
+            "ego_speed": ParamRange(kind="uniform", low=11.0, high=13.0,
+                                    unit="m/s"),
+            "slow_speed": ParamRange(kind="uniform", low=5.0, high=8.0,
+                                     unit="m/s"),
+            "slow_gap": ParamRange(kind="uniform", low=40.0, high=55.0,
+                                   unit="m"),
+            "oncoming_speed": ParamRange(kind="uniform", low=11.0, high=13.0,
+                                         unit="m/s"),
+            "oncoming_gap": ParamRange(kind="fixed", value=95.0, unit="m"),
+            # 退避触发必须晚于侵入完成（lc_delay + lc_time），否则对向车
+            # 尚未跨过中心线，此时"退回"会把本车道当作目标再次驶入。
+            "lc_delay": ParamRange(kind="fixed", value=0.5, unit="s"),
+            "brake_gap": ParamRange(kind="uniform", low=65.0, high=75.0,
+                                    unit="m"),
+            "abort_gap": ParamRange(kind="fixed", value=40.0, unit="m"),
+            "abort_time": ParamRange(kind="fixed", value=1.2, unit="s"),
         }),
     "signal_phase": TemplateSpec(
         name="signal_phase", title="红绿灯相位",

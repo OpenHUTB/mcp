@@ -145,6 +145,7 @@ class ParamRange(BaseModel):
       - "int"     整数均匀
       - "choice"  从 choices 中离散选取
       - "fixed"   固定值（不参与采样）
+      - "string"  自由字符串（如地图 roadId，不做范围校验）
     """
     kind: str = "uniform"
     low: Optional[float] = None
@@ -166,6 +167,8 @@ class ParamRange(BaseModel):
         elif self.kind == "fixed":
             if self.value is None:
                 raise ValueError("fixed 需要 value")
+        elif self.kind == "string":
+            pass
         else:
             raise ValueError("未知 kind: %s" % self.kind)
         return self

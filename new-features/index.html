@@ -43,13 +43,29 @@
 <ul class="current">
 <li class="toctree-l1 current"><a class="reference internal current" href="#">New Features</a>
 <ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="#2026-11--借道超车遇对向来车场景">2026-11 · 借道超车遇对向来车场景</a>
+<ul>
+<li class="toctree-l3"><a class="reference internal" href="#1-用法">1. 用法</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#2-场景编排">2. 场景编排</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#3-效果">3. 效果</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#4-修正借对向车道变道后掉头">4. 修正：借对向车道变道后掉头</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#5-实测结果">5. 实测结果</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#6-已知限制">6. 已知限制</a>
+</li>
+</ul>
+</li>
 <li class="toctree-l2"><a class="reference internal" href="#2026-11--运行危险度指标">2026-11 · 运行危险度指标</a>
 <ul>
 <li class="toctree-l3"><a class="reference internal" href="#1-指标口径">1. 指标口径</a>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#2-实现说明">2. 实现说明</a>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#3-效果">3. 效果</a>
+<li class="toctree-l3"><a class="reference internal" href="#3-效果_1">3. 效果</a>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#4-实测结果">4. 实测结果</a>
 </li>
@@ -59,23 +75,23 @@
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#2026-11--鬼探头场景与行人驱动">2026-11 · 鬼探头场景与行人驱动</a>
 <ul>
-<li class="toctree-l3"><a class="reference internal" href="#1-用法">1. 用法</a>
+<li class="toctree-l3"><a class="reference internal" href="#1-用法_1">1. 用法</a>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#2-场景编排">2. 场景编排</a>
+<li class="toctree-l3"><a class="reference internal" href="#2-场景编排_1">2. 场景编排</a>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#3-效果_1">3. 效果</a>
+<li class="toctree-l3"><a class="reference internal" href="#3-效果_2">3. 效果</a>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#4-修掉的两个问题">4. 修掉的两个问题</a>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#5-实测结果">5. 实测结果</a>
+<li class="toctree-l3"><a class="reference internal" href="#5-实测结果_1">5. 实测结果</a>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#6-已知限制">6. 已知限制</a>
+<li class="toctree-l3"><a class="reference internal" href="#6-已知限制_1">6. 已知限制</a>
 </li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#2026-11--自然语言场景生成">2026-11 · 自然语言场景生成</a>
 <ul>
-<li class="toctree-l3"><a class="reference internal" href="#1-用法_1">1. 用法</a>
+<li class="toctree-l3"><a class="reference internal" href="#1-用法_2">1. 用法</a>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#2-支持的表达">2. 支持的表达</a>
 </li>
@@ -83,7 +99,7 @@
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#4-解决的问题">4. 解决的问题</a>
 </li>
-<li class="toctree-l3"><a class="reference internal" href="#5-实测结果_1">5. 实测结果</a>
+<li class="toctree-l3"><a class="reference internal" href="#5-实测结果_2">5. 实测结果</a>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#6-输入容错">6. 输入容错</a>
 </li>
@@ -205,6 +221,106 @@
 <p>按时间倒序记录新增功能。每个功能都给出：<strong>能力说明、调用方式、示例、效果</strong>。</p>
 <p>图片全部使用绝对链接。</p>
 <hr/>
+<h2 id="2026-11--借道超车遇对向来车场景">2026-11 · 借道超车遇对向来车场景</h2>
+<p>本版新增 <code>overtake_oncoming</code> 模板：自车借对向车道超越前方慢车，
+对向有车驶来时放弃超车、减速并回到原车道。同时修正了播放器
+"借对向车道变道后车头掉转 180°"的问题。</p>
+<h3 id="1-用法">1. 用法</h3>
+<div class="highlight"><pre><span></span><code>借对向车道超车时对面有车驶来，只好放弃超车
+超车到一半发现对向来车，赶紧回到原车道
+</code></pre></div>
+<p>语义层把 <code>超车遇对向来车</code>、<code>超车遇来车</code>、<code>放弃超车</code>、<code>对向有车驶来</code>
+等说法路由到该模板；输入同时含"超车"和"对向"时额外加权，
+避免落到只演示变道超越的 <code>overtake</code>。</p>
+<div class="highlight"><pre><span></span><code><span class="n">plan_scenario</span><span class="p">(</span><span class="s2">"超车到一半发现对向来车，赶紧回到原车道"</span><span class="p">)</span>
+<span class="c1"># → {"template": "overtake_oncoming", "confidence": 1.0, ...}</span>
+</code></pre></div>
+<h3 id="2-场景编排">2. 场景编排</h3>
+<p>自车 20 m 处起步、12 m/s，前方 45 m 处慢车 7 m/s，对向车道 170 m 外
+一辆 11 m/s 的车驶来。2 s 后自车借对向车道超车；双方中心距缩到 55 m 时，
+自车在同一时刻触发两个动作：回到原车道、减速到 7 m/s。</p>
+<table>
+<thead>
+<tr>
+<th>时刻</th>
+<th>事件</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0 s</td>
+<td>自车 12 m/s、慢车 7 m/s、对向车 11 m/s 同时起步</td>
+</tr>
+<tr>
+<td>2.0 s</td>
+<td>自车向左变道，进入对向车道开始超车</td>
+</tr>
+<tr>
+<td>距对向车 55 m</td>
+<td>放弃超车：回原车道 + 线性减速</td>
+</tr>
+<tr>
+<td>约 7.0 s</td>
+<td>自车回到原车道，跟在前车后方</td>
+</tr>
+<tr>
+<td>约 7.4 s</td>
+<td>对向车从左侧驶过，无碰撞</td>
+</tr>
+</tbody>
+</table>
+<p>参数：<code>ego_speed</code>、<code>lead_speed</code>、<code>gap</code>、<code>oncoming_speed</code>、<code>oncoming_gap</code>、
+<code>lc_delay</code>、<code>abort_gap</code>，均可通过 <code>params_json</code> 覆盖。</p>
+<h3 id="3-效果">3. 效果</h3>
+<p><img alt="借道超车遇对向来车" src="../img/scenario_overtake_oncoming.gif"/></p>
+<div align="center"><i>overtake_oncoming：借左车道超车 → 对向车接近 → 放弃超车回原车道（红圈为对向车，黄圈为慢车，11 帧）</i></div>
+<h3 id="4-修正借对向车道变道后掉头">4. 修正：借对向车道变道后掉头</h3>
+<p>播放器变道收尾时按<strong>目标车道</strong>的名义朝向对齐车头。对向车道的名义朝向
+与自车相差 180°，于是自车刚并到对向车道就被转成反向行驶。
+现改为：目标车道朝向与变道前的行驶方向夹角超过 90° 时，保留原行驶方向，
+只在同一行驶方向内做收尾对齐。本次回归中自车全程保持 +x 行驶，
+不再掉头。</p>
+<h3 id="5-实测结果">5. 实测结果</h3>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th>结果</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>离线回归（17 个模板）</td>
+<td>全部通过，3 实体 / 5 事件</td>
+</tr>
+<tr>
+<td>CARLA 实跑（<code>wide_straight</code>）</td>
+<td>5 个事件全部触发，5.15 s 放弃超车，约 7.0 s 回到原车道，无碰撞</td>
+</tr>
+<tr>
+<td>会车最小中心距</td>
+<td>3.41 m（t=7.65 s，相邻对向车道正常会车）</td>
+</tr>
+<tr>
+<td>最大减速度</td>
+<td>6.02 m/s²</td>
+</tr>
+<tr>
+<td>语义识别</td>
+<td><code>超车遇对向来车</code>、<code>放弃超车</code> 均命中 <code>overtake_oncoming</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="6-已知限制">6. 已知限制</h3>
+<ul>
+<li>播放器的 TTC 只按纵向距离与相对速度计算，不区分车道；会车瞬间
+  两车横向相距 3.5 m，TTC 仍会接近 0，不代表碰撞风险。</li>
+<li><code>abort_return</code> 的变道方向 <code>+1</code> 针对 <code>wide_straight</code> 的车道编号
+  （+1 车道需向中心线方向回到 -1），换用其他路网时需确认车道号方向。</li>
+<li>既有 <code>overtake</code> 模板的回车道动作仍用 <code>-1</code>，在该路网上会走到更外侧
+  的车道；本版未改动该模板，留待单独修复。</li>
+</ul>
+<hr/>
 <h2 id="2026-11--运行危险度指标">2026-11 · 运行危险度指标</h2>
 <p>场景回放此前只给截图和事件，能看出“发生了什么”，但看不出“危险到什么程度”。
 本版让播放器在结束时汇总五项指标，<code>summarize()</code> 与 <code>run_scenario_in_carla</code>
@@ -262,7 +378,7 @@
 <li>结果放在 <code>play()</code> 返回值的 <code>metrics</code> 字段，<code>summarize()</code> 负责排版，
   MCP 工具层无需改动</li>
 </ul>
-<h3 id="3-效果">3. 效果</h3>
+<h3 id="3-效果_1">3. 效果</h3>
 <p><img alt="运行指标" src="../img/scenario_run_metrics.gif"/></p>
 <div align="center"><i>occluded_crossing：右上角实时显示自车速度、与行人的距离和 TTC，末帧汇总本次运行指标</i></div>
 <h3 id="4-实测结果">4. 实测结果</h3>
@@ -293,7 +409,7 @@
 <h2 id="2026-11--鬼探头场景与行人驱动">2026-11 · 鬼探头场景与行人驱动</h2>
 <p>本版新增 <code>occluded_crossing</code> 模板（鬼探头），并修复横穿类场景的两个问题：
 横穿者出发点无效导致布景失败、行人在生成路网中不移动。</p>
-<h3 id="1-用法">1. 用法</h3>
+<h3 id="1-用法_1">1. 用法</h3>
 <div class="highlight"><pre><span></span><code>路边停着的车后面突然窜出一个人
 公交车挡住视线，车头突然冒出个行人
 </code></pre></div>
@@ -302,7 +418,7 @@
 <div class="highlight"><pre><span></span><code><span class="n">plan_scenario</span><span class="p">(</span><span class="s2">"路边停着的车后面突然窜出一个人"</span><span class="p">)</span>
 <span class="c1"># → {"template": "occluded_crossing", "confidence": 1.0, ...}</span>
 </code></pre></div>
-<h3 id="2-场景编排">2. 场景编排</h3>
+<h3 id="2-场景编排_1">2. 场景编排</h3>
 <p>本车道前方 35 m 停放一辆遮挡视线的车，行人从该车车尾后方 3.5 m 处起步横穿；
 自车匀速 8 m/s 接近，距横穿线 18 m 时线性制动至停止。</p>
 <table>
@@ -333,7 +449,7 @@
 </table>
 <p>参数：<code>occluder_gap</code>（遮挡车距离）、<code>lateral</code>（行人横向距离）、
 <code>ped_speed</code>、<code>start_delay</code>、<code>ego_speed</code>，均可通过 <code>params_json</code> 覆盖。</p>
-<h3 id="3-效果_1">3. 效果</h3>
+<h3 id="3-效果_2">3. 效果</h3>
 <p><img alt="鬼探头" src="../img/scenario_occluded_crossing.gif"/></p>
 <div align="center"><i>occluded_crossing：自车制动停止，行人从遮挡车尾横穿（红圈为行人，12 帧，0.5 秒/帧）</i></div>
 <h3 id="4-修掉的两个问题">4. 修掉的两个问题</h3>
@@ -348,7 +464,7 @@
    现改为逐帧下发 <code>WalkerControl</code>（速度 + 当前朝向），
    实测位移与请求速度一致，不再需要速度补偿。</li>
 </ol>
-<h3 id="5-实测结果">5. 实测结果</h3>
+<h3 id="5-实测结果_1">5. 实测结果</h3>
 <table>
 <thead>
 <tr>
@@ -371,7 +487,7 @@
 </tr>
 </tbody>
 </table>
-<h3 id="6-已知限制">6. 已知限制</h3>
+<h3 id="6-已知限制_1">6. 已知限制</h3>
 <ul>
 <li>行人在播放器里按固定朝向直线行走，不会绕开途中障碍物</li>
 <li>俯视截图中行人仅约 30 px 高，动图为便于辨认加了红圈标注</li>
@@ -381,7 +497,7 @@
 <p>此前由大模型直接编写场景脚本，存在两类问题：生成的代码无法编译，或调用不存在的接口。
 本版将流程拆分为<strong>语义解析</strong>与<strong>模板装配</strong>两步：语义层只负责识别场景类型与参数，
 脚本由模板库生成，可执行性由模板库保证。</p>
-<h3 id="1-用法_1">1. 用法</h3>
+<h3 id="1-用法_2">1. 用法</h3>
 <p>直接用自然语言描述场景：</p>
 <div class="highlight"><pre><span></span><code>旁边车加塞到我前面后立刻急刹
 前方车辆突然急刹，我车速 60
@@ -476,7 +592,7 @@
 <li><strong>变道结束后车辆漂移</strong>。变道结束时车身仍存在约 15° 偏角，恢复匀速后该偏角被保留，
    车辆逐渐驶出车道。修复方式为结束时将航向对齐车道切线，并在后续保持目标车道。</li>
 </ol>
-<h3 id="5-实测结果_1">5. 实测结果</h3>
+<h3 id="5-实测结果_2">5. 实测结果</h3>
 <table>
 <thead>
 <tr>

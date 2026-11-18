@@ -751,6 +751,73 @@ def build_overtake(p: Dict[str, Any]) -> ScenarioSpec:
 
 
 # =====================================================================
+# 模板 10b：借道超车遇对向来车
+#   双向直路，自车借左车道超越前方慢车；对向有车驶来，自车放弃超车，
+#   减速并回到原车道。用相对距离触发同时驱动"回原车道 + 减速"。
+# =====================================================================
+def build_overtake_oncoming(p: Dict[str, Any]) -> ScenarioSpec:
+    # 起点取 20m 而非其他模板的 50m：对向车需要 170m 的初始间距，
+    # 才能保证自车回到原车道后对向车才驶过；默认 200m 直路刚好放得下。
+    s0 = float(p.get("s0", 20.0))
+    ego_speed = float(p.get("ego_speed", 12.0))
+    lead_speed = float(p.get("lead_speed", 7.0))
+    gap = float(p.get("gap", 45.0))
+    oncoming_gap = float(p.get("oncoming_gap", 170.0))
+    oncoming_speed = float(p.get("oncoming_speed", 11.0))
+    lc_delay = float(p.get("lc_delay", 2.0))
+    lc_time = float(p.get("lc_time", 1.8))
+    abort_gap = float(p.get("abort_gap", 55.0))
+    brake_time = float(p.get("brake_time", 2.0))
+    duration = float(p.get("duration", 15.0))
+
+    def _named(b: BehaviorSpec, name: str) -> BehaviorSpec:
+        b.name = name
+        return b
+
+    # 对向车与自车相向而行，相对距离降到 abort_gap 时同时触发
+    # "向左变道"的反向动作与减速，避免在左车道一直开到会车。
+    abort_cond = dict(kind=TriggerKind.RELATIVE_DISTANCE, rule=Rule.LESS_THAN,
+                      value=abort_gap, entity_ref="oncoming",
+                      triggering_entity="ego")
+
+    return ScenarioSpec(
+        name="overtake_oncoming",
+        description="借左车道超越前车时对向有车驶来，双方距离 %.0fm 时"
+                    "放弃超车并回到原车道" % abort_gap,
+        entities=[_veh("ego", s0, ego_speed, LANE_R),
+                  _veh("lead", s0 + gap, lead_speed, LANE_R),
+                  _veh("oncoming", s0 + oncoming_gap, oncoming_speed,
+                       LANE_ONCOMING)],
+        behaviors=[
+            _named(_speed("ego", ego_speed, DynamicsShape.STEP, 0.0),
+                   "ego_cruise"),
+            _named(_speed("oncoming", oncoming_speed, DynamicsShape.STEP, 0.0),
+                   "oncoming_cruise"),
+            _named(_lane_change("ego", +1, lc_time), "overtake_left"),
+            # 对向车道（+1）的相邻车道号在另一侧，回本车道要按 +1 取左侧
+            # 相邻车道（-1），否则会继续向外侧车道偏移。
+            _named(_lane_change("ego", +1, lc_time), "abort_return"),
+            _named(_speed("ego", lead_speed, DynamicsShape.LINEAR, brake_time),
+                   "abort_brake"),
+        ],
+        triggers=[
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0, name="start"),
+            TriggerSpec(kind=TriggerKind.TIME, value=0.0, name="oncoming_start"),
+            TriggerSpec(kind=TriggerKind.TIME, value=lc_delay,
+                        name="begin_overtake"),
+            TriggerSpec(name="abort_return_trigger", **abort_cond),
+            TriggerSpec(name="abort_brake_trigger", **abort_cond),
+        ],
+        duration=duration, template="overtake_oncoming",
+        params={"ego_speed": ego_speed, "lead_speed": lead_speed,
+                "gap": gap, "oncoming_speed": oncoming_speed,
+                "oncoming_gap": oncoming_gap, "lc_delay": lc_delay,
+                "abort_gap": abort_gap},
+        tags=["超车", "对向来车", "放弃超车", "变道"],
+    )
+
+
+# =====================================================================
 # 模板 11：紧急避让（轨迹跟随）
 #   前方本车道有静止障碍，自车按一条 S 形轨迹换道绕行。
 #   用 FollowTrajectoryAction 表达任意形状的避让路径。
@@ -867,6 +934,7 @@ _BUILDERS: Dict[str, Callable[[Dict[str, Any]], ScenarioSpec]] = {
     "junction_light": build_junction_light,
     "close_follow": build_close_follow,
     "overtake": build_overtake,
+    "overtake_oncoming": build_overtake_oncoming,
     "evasive_swerve": build_evasive_swerve,
     "signal_phase": build_signal_phase,
 }
@@ -1033,6 +1101,25 @@ TEMPLATES: Dict[str, TemplateSpec] = {
             "lead_speed": ParamRange(kind="uniform", low=5.0, high=10.0, unit="m/s"),
             "gap": ParamRange(kind="uniform", low=30.0, high=55.0, unit="m"),
             "delta": ParamRange(kind="uniform", low=3.0, high=6.0, unit="m/s"),
+        }),
+    "overtake_oncoming": TemplateSpec(
+        name="overtake_oncoming", title="借道超车遇对向来车",
+        description="借左车道超车时对向有车驶来，放弃超车、减速并回到原车道",
+        carla_function="scenario_cut_in", tags=["超车", "对向来车"],
+        params={
+            # 参数区间收敛在"对向车通过前能完成回到原车道"的范围内，
+            # 避免采样出借道时与慢车并排、或回车道前来不及避让的组合。
+            "ego_speed": ParamRange(kind="uniform", low=11.0, high=13.0,
+                                    unit="m/s"),
+            "lead_speed": ParamRange(kind="uniform", low=7.0, high=8.0,
+                                     unit="m/s"),
+            "gap": ParamRange(kind="uniform", low=45.0, high=55.0, unit="m"),
+            "oncoming_speed": ParamRange(kind="uniform", low=10.0, high=12.0,
+                                         unit="m/s"),
+            "oncoming_gap": ParamRange(kind="fixed", value=170.0, unit="m"),
+            "lc_delay": ParamRange(kind="uniform", low=1.5, high=2.5, unit="s"),
+            "abort_gap": ParamRange(kind="uniform", low=55.0, high=70.0,
+                                    unit="m"),
         }),
     "signal_phase": TemplateSpec(
         name="signal_phase", title="红绿灯相位",

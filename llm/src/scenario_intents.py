@@ -96,6 +96,13 @@ INTENTS: Dict[str, Dict[str, Any]] = {
         "aliases": ["超车", "借道超车", "对向超车", "超越慢车", "逆向超车"],
         "examples": ["借对向车道超越前方慢车", "超车时对向有车驶来"],
     },
+    "overtake_oncoming": {
+        "aliases": ["超车遇对向来车", "超车遇来车", "超车时对向来车",
+                    "借道超车遇对向", "超车遇对向", "放弃超车",
+                    "超车回原车道", "对向有车驶来"],
+        "examples": ["借对向车道超车时对面有车驶来，只好放弃超车",
+                     "超车到一半发现对向来车，赶紧回到原车道"],
+    },
     "signal_phase": {
         "aliases": ["红绿灯", "信号配时", "绿灯起步", "黄灯", "红灯停车",
                     "信号灯变化"],
@@ -119,6 +126,9 @@ _BOOSTS = [
     (("鬼探头",), "occluded_crossing", 8.0),
     (("遮挡",), "occluded_crossing", 4.0),
     (("逆行",), "wrong_way", 4.0),
+    (("超车", "对向"), "overtake_oncoming", 8.0),
+    (("超车", "来车"), "overtake_oncoming", 6.0),
+    (("借道", "对向"), "overtake_oncoming", 6.0),
     (("闯红灯",), "junction_light", 6.0),
     (("左转",), "unprotected_turn", 3.0),
     (("汇入",), "merge_turn", 3.0),

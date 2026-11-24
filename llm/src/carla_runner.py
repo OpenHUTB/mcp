@@ -26,6 +26,54 @@ import carla
 from scenario_ir import EntityKind, PositionKind, ScenarioSpec
 
 
+# =====================================================================
+# 版本与地图 URL
+# =====================================================================
+def hutb_version() -> Optional[str]:
+    """返回已安装的 HUTB 客户端版本；官方 CARLA wheel 返回 None。
+
+    HUTB 的 Python 包分发名是 ``hutb``（模块仍叫 ``carla``），
+    官方 CARLA 的分发名是 ``carla``，两者靠这一点区分。
+    """
+    try:
+        from importlib.metadata import version
+        return version("hutb")
+    except Exception:
+        return None
+
+
+def is_hutb() -> bool:
+    return hutb_version() is not None
+
+
+def map_url(map_name: str) -> str:
+    """给 HUTB 的地图名补上 ``?GAME=CARLA``。
+
+    HUTB 的默认 GameMode 是 AirSim 无人机（``SimMode: Multirotor``），
+    直接 ``load_world("Town03")`` 会按无人机模式重载并崩溃；
+    加上 URL 选项 ``GAME=CARLA`` 才会走 CARLA 车辆模式。
+    官方 CARLA 不认识该选项，因此只对 HUTB 追加。
+    """
+    if not is_hutb() or "GAME=" in map_name:
+        return map_name
+    sep = "&" if "?" in map_name else "?"
+    return map_name + sep + "GAME=CARLA"
+
+
+# 记录已经按 CARLA 模式加载过的 (client, 地图)，避免同图反复重载
+_CARLA_MODE_READY: Dict[Tuple[int, str], bool] = {}
+
+
+def mark_carla_mode(client: Any, map_name: str) -> None:
+    want = map_name.rsplit("/", 1)[-1].split("?")[0].lower()
+    _CARLA_MODE_READY[(id(client), want)] = True
+
+
+def is_carla_mode_ready(client: Any, map_name: str) -> bool:
+    want = map_name.rsplit("/", 1)[-1].split("?")[0].lower()
+    return _CARLA_MODE_READY.get((id(client), want), False)
+
+
 class CarlaRunnerError(RuntimeError):
     pass
 
@@ -95,21 +143,42 @@ def load_xodr_world(client: carla.Client, xodr_path: str,
     return client.generate_opendrive_world(content, params, True)
 
 
-def load_builtin_world(client: carla.Client, map_name: str = "Town03") -> carla.World:
+def load_builtin_world(client: carla.Client, map_name: str = "Town03",
+                       retries: int = 2, retry_wait: float = 5.0) -> carla.World:
     """加载内置地图；服务端已经在这张图上时直接复用。
 
     切图要重建地图与导航网格，耗时且容易把服务端打挂，
-    所以同图时不再调用 load_world。
+    所以同图时不再调用 load_world。HUTB 例外：同图也要确认
+    已经用 ``?GAME=CARLA`` 加载过，否则仍是无人机模式，不能布景。
+
+    加载超时会重试 ``retries`` 次；若模拟器进程已经退出，
+    重试仍会失败，此时需要外部拉起模拟器。
     """
-    try:
-        current = client.get_world().get_map().name
-    except Exception:
-        current = ""
-    cur = current.rsplit("/", 1)[-1].lower()
-    want = map_name.rsplit("/", 1)[-1].lower()
-    if cur and cur == want:
-        return client.get_world()
-    return client.load_world(map_name)
+    want = map_name.rsplit("/", 1)[-1].split("?")[0].lower()
+    url = map_url(map_name)
+
+    last: Optional[Exception] = None
+    for attempt in range(retries + 1):
+        try:
+            try:
+                current = client.get_world().get_map().name
+            except Exception:
+                current = ""
+            cur = current.rsplit("/", 1)[-1].split("?")[0].lower()
+            if cur and cur == want and (not is_hutb()
+                                        or is_carla_mode_ready(client, want)):
+                return client.get_world()
+            world = client.load_world(url)
+            mark_carla_mode(client, want)
+            return world
+        except RuntimeError as e:
+            last = e
+            if attempt >= retries:
+                break
+            time.sleep(retry_wait)
+
+    raise CarlaRunnerError(
+        "加载地图 %s 失败（重试 %d 次）：%s" % (map_name, retries, last))
 
 
 # =====================================================================

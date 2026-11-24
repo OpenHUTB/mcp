@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "carla>=0.9.15",
+    # carla 客户端由模拟器发行包提供：官方 carla wheel 或 HUTB 的 hutb wheel
+    # （模块名同为 carla）。此处不声明，避免 pip 覆盖已安装的 HUTB 客户端。
     "mcp>=1.6.0",
 ]

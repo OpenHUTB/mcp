@@ -31,4 +31,7 @@ lxml>=5.0.0
 # 场景截图（xosc_player 用 cv2 把相机帧压成 PNG）
 opencv-python>=4.8.0
 
-carla==0.9.16
+# CARLA/HUTB 客户端（二选一，不要混装；两者模块名都叫 carla）
+#   官方 CARLA 0.9.16：  pip install carla==0.9.16
+#   HUTB 2.10 及以上：   pip install <HUTB目录>/PythonAPI/carla/dist/hutb-2.10.*-cp310-cp310-win_amd64.whl
+# 这里不做硬性钉死，避免覆盖已安装的 HUTB 客户端。

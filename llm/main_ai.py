@@ -108,20 +108,23 @@ class CarlaClient:
             if self.client is None:
                 app_logger.error("❌ 未连接到CARLA服务器")
                 return False
+            from src.carla_runner import (is_hutb, is_carla_mode_ready,
+                                          map_url, mark_carla_mode)
+            want = map_name.rsplit('/', 1)[-1]
             # 已是目标地图则跳过（重复加载同一地图也会重建世界，耗时且可能超时）
             current = self.world.get_map().name if self.world is not None else ''
-            if map_name in current:
+            if want in current and (not is_hutb()
+                                    or is_carla_mode_ready(self.client, want)):
                 app_logger.info(f"✅ 地图已是 {map_name}，无需重复加载")
                 return True
-            if 'Town03' in map_name:
-                app_logger.error("❌ Town03地图包在本环境加载即崩溃，已禁用")
-                return False
             if getattr(self, '_tm_used', False):
                 app_logger.error("❌ 本会话已使用过自动驾驶(Traffic Manager)，运行时切图会崩掉服务进程。请用目标地图重新启动CARLA后再连接")
                 return False
             # 大地图加载常超过10s，临时调高超时时间
             self.client.set_timeout(90)
-            self.world = self.client.load_world(map_name)
+            self.world = self.client.load_world(map_url(map_name))
+            if is_hutb():
+                mark_carla_mode(self.client, want)
             self.client.set_timeout(10)
             app_logger.info(f"✅ 地图加载成功: {map_name}")
             return True
@@ -1372,21 +1375,23 @@ class CarlaClient:
     async def _ensure_map(self, map_name):
         """切换到指定地图（仅在本进程尚未使用过Traffic Manager时安全）。
 
-        实测结论（CARLA 0.9.16 Windows）：
+        实测结论（CARLA 0.9.16 / HUTB 2.10）：
         - 一旦本进程使用过自动驾驶(TM)，任何后续切图都会触发原生断言
           Simulator.h:124 `_episode != nullptr` 直接崩掉 web 进程，无法规避；
-        - Town03 地图包在本环境加载即导致 CARLA 服务器崩溃， permanently 禁用。
+        - HUTB 需要在加载地图时带 `?GAME=CARLA`，否则会按无人机模式重载并崩溃，
+          该处理统一由 carla_runner.map_url() 完成。
         因此：用过TM后拒绝切图并给出明确指引；未用过TM时可在干净会话内切图。
         """
         if not map_name:
             return True
         try:
+            from src.carla_runner import (is_hutb, is_carla_mode_ready,
+                                          map_url, mark_carla_mode)
+            want = map_name.rsplit('/', 1)[-1]
             current = self.world.get_map().name
-            if map_name in current:
+            if want in current and (not is_hutb()
+                                    or is_carla_mode_ready(self.client, want)):
                 return True
-            if 'Town03' in map_name:
-                app_logger.error(f"❌ [场景] Town03地图包在本环境加载即崩溃，已禁用: {map_name}")
-                return False
             if getattr(self, '_tm_used', False):
                 app_logger.error(
                     f"❌ [场景] 本会话已使用过自动驾驶(Traffic Manager)，运行时切图会崩掉服务进程。"
@@ -1394,7 +1399,9 @@ class CarlaClient:
                 return False
             app_logger.info(f"🗺️ [场景] 干净会话内加载地图 {map_name} (当前: {current})")
             self.client.set_timeout(90)
-            self.world = self.client.load_world(map_name)
+            self.world = self.client.load_world(map_url(map_name))
+            if is_hutb():
+                mark_carla_mode(self.client, want)
             self.client.set_timeout(10)
             app_logger.info(f"✅ 地图加载成功: {map_name}")
             return True
@@ -3984,10 +3991,10 @@ class CarlaClient:
                 )
                 result += (
                     f"\n⚠️ 画面可能没有跟着切换：相机实际距目标 {detail}。"
-                    f"当前模拟器版本 {version or '未知'} 与代码不匹配 —— "
-                    "新版 HUTB 默认启动无人机视角，会覆盖外部设置的相机。"
-                    "请改用 HUTB v2.2（同步至 CARLA 0.9.16）："
-                    "https://github.com/OpenHUTB/hutb/releases/tag/v2.2"
+                    f"当前模拟器版本 {version or '未知'}。"
+                    "HUTB 默认以无人机模式启动，会覆盖外部设置的相机；"
+                    "请让地图以 `?GAME=CARLA` 加载（run_scenario_in_carla 已自动追加），"
+                    "或在模拟器启动时选择 CARLA 车辆模式（HUTB 2.10 及以上）。"
                 )
 
         return result

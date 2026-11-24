@@ -53,6 +53,12 @@ def check_params(template: str, params: Dict[str, Any],
                                      "参数 `%s` 取值 %r 不在可选范围内" % (key, value),
                                      "可选：%s" % ", ".join(map(str, pr.choices))))
             continue
+        if pr.kind == "string":
+            if not isinstance(value, (str, int)):
+                issues.append(_issue("not_string",
+                                     "参数 `%s` 需要字符串，收到 %r" % (key, value),
+                                     "示例：%r" % (pr.value if pr.value is not None else "1")))
+            continue
         try:
             num = float(value)
         except (TypeError, ValueError):

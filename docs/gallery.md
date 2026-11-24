@@ -2,7 +2,7 @@ title: 效果展示
 
 # 效果展示
 
-以下全部由本项目生成的 `.xodr` 与 `.xosc` 在 CARLA 0.9.16 中渲染，
+以下全部由本项目生成的 `.xodr` 与 `.xosc` 在 HUTB 2.10.1（同步至 CARLA 0.9.16 API）中渲染，
 **不是导入的现成地图或示意图**。
 
 ## 1. 场景执行
@@ -18,6 +18,12 @@ title: 效果展示
 
 ![借道超车遇对向来车](img/scenario_overtake_oncoming.gif)
 <div align="center"><i>overtake_oncoming（借道超车遇对向来车）播放 8 秒：借对向车道超车 → 对向车接近 → 放弃超车回原车道（红圈为对向车，黄圈为慢车，11 帧；底部为口语输入与命中模板）</i></div>
+
+![前车切出遇静止车辆](img/scenario_cut_out.gif)
+<div align="center"><i>cut_out（前车切出遇静止车辆）播放 6 秒：前车让出本车道 → 露出静止车 → 自车制动停车（红圈为静止车，黄圈为前车，10 帧；底部为口语输入与命中模板）</i></div>
+
+![对向车借道侵入本车道](img/scenario_oncoming_intrusion.gif)
+<div align="center"><i>oncoming_intrusion（对向车借道侵入本车道）播放 5 秒：对向车越线借道 → 自车制动 → 来车退回原车道（红圈为对向车，黄圈为慢车，11 帧；底部为口语输入与命中模板）</i></div>
 
 ![运行指标](img/scenario_run_metrics.gif)
 <div align="center"><i>运行危险度指标：右上角实时显示自车速度、与行人距离与 TTC，末帧汇总碰撞/最小中心距/最小 TTC/最大减速度/末速</i></div>
@@ -101,3 +107,4 @@ title: 效果展示
 | `low_overlap` | 3 | 4/4 | 0 |
 | `unprotected_turn` | 3 | 4/4 | 0 |
 | `cut_in` | 4 | 4/5 | 0 |
+| `oncoming_intrusion` | 3 | 7/7 | 0 |

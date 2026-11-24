@@ -8,6 +8,45 @@ title: New Features
 
 ---
 
+## 2026-11 · 适配 HUTB 2.10.1
+
+模拟器从 CARLA 0.9.16 升级到 HUTB 2.10.1（同步至 CARLA 0.9.16 API）。HUTB 的默认
+GameMode 是 AirSim 无人机（`settings.json` 中 `SimMode: Multirotor`），直接
+`load_world("Town03")` 会按无人机模式重载并导致模拟器进程崩溃。
+
+### 1. 改动
+
+- `llm/src/carla_runner.py`
+  - 新增 `hutb_version()` / `is_hutb()`：按 pip 分发名 `hutb` 区分 HUTB 与官方 CARLA。
+  - 新增 `map_url()`：HUTB 下自动给地图名追加 `?GAME=CARLA`，切换到车辆模式。
+  - `load_builtin_world()` 改用 `map_url()`，并记录已按车辆模式加载过的地图：
+    HUTB 下即使当前地图同名，也要确认是用 `?GAME=CARLA` 载入的，否则重新加载。
+  - 地图加载超时自动重试（默认 2 次，间隔 5 秒）。
+- `llm/main_ai.py`
+  - `load_world()` / `_ensure_map()` 改用 `map_url()`；
+    移除"Town03 加载即崩溃、已禁用"的硬限制。
+  - 相机未生效的提示改为引导 `?GAME=CARLA` / 车辆模式，不再要求降级到 HUTB v2.2。
+- `llm/requirements.txt`、`sim/pyproject.toml`：不再钉死或声明 `carla` 包，
+  避免 pip 用官方 wheel 覆盖已安装的 HUTB 客户端。
+
+### 2. 验证
+
+| 项目 | 结果 |
+|---|---|
+| 客户端 / 服务端 | `hutb 2.10.1` / 服务端版本 `3ea2130ed` |
+| 连接 | 2000 端口；内置地图 26 个 |
+| Town03 | 54 种车辆蓝图、265 个生成点；同步 60 帧后车速 12.56 m/s |
+| 离线回归 | 19/19 模板通过；语义路由用例全部命中 |
+| 城市实跑 | `oncoming_intrusion`：3 实体 / 7 事件全部触发，无碰撞，最小中心距 3.46 m，自车末速 0.06 m/s |
+
+### 3. 已知限制
+
+- 用过 Traffic Manager 后仍不能运行时切图（原生断言 `_episode != nullptr`），
+  需带目标地图重启模拟器，与 0.9.16 相同。
+- HUTB 发行包未签名，Windows 11 Smart App Control 会拦截启动；
+  需要在系统设置中关闭该功能（不可逆）。
+
+---
 ## 2026-11 · 借道超车遇对向来车场景
 
 本版新增 `overtake_oncoming` 模板：自车借对向车道超越前方慢车，

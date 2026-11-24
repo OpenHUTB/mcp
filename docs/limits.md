@@ -4,7 +4,7 @@ title: 实测数据与限制
 
 ## 1. 实测数据
 
-测试环境：Windows 11 + Python 3.10 + CARLA 0.9.16 + AMD Radeon 880M 集显。
+测试环境：Windows 11 + Python 3.10 + HUTB 2.10.1（同步至 CARLA 0.9.16 API）+ AMD Radeon 880M 集显。
 
 ### 1.1 场景
 

@@ -65,9 +65,11 @@
 </li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="#3-16-个场景模板">3. 16 个场景模板</a>
+<li class="toctree-l2"><a class="reference internal" href="#3-17-个场景模板">3. 17 个场景模板</a>
 <ul>
 <li class="toctree-l3"><a class="reference internal" href="#31-鬼探头-occluded_crossing">3.1 鬼探头 occluded_crossing</a>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#32-借道超车遇对向来车-overtake_oncoming">3.2 借道超车遇对向来车 overtake_oncoming</a>
 </li>
 </ul>
 </li>
@@ -219,7 +221,7 @@
 </tr>
 </tbody>
 </table>
-<h2 id="3-16-个场景模板">3. 16 个场景模板</h2>
+<h2 id="3-17-个场景模板">3. 17 个场景模板</h2>
 <table>
 <thead>
 <tr>
@@ -315,6 +317,12 @@
 <td>时间、距离、到达</td>
 </tr>
 <tr>
+<td><code>overtake_oncoming</code></td>
+<td>借道超车遇对向来车</td>
+<td>3</td>
+<td>时间、相对距离</td>
+</tr>
+<tr>
 <td><code>evasive_swerve</code></td>
 <td>紧急避让（轨迹跟随）</td>
 <td>3</td>
@@ -374,6 +382,65 @@
 </table>
 <p>与 <code>crossing_hazard</code> 的区别是多了遮挡车辆，且横穿起点位于停放车辆后方，
 自车的反应距离更短。</p>
+<h3 id="32-借道超车遇对向来车-overtake_oncoming">3.2 借道超车遇对向来车 <code>overtake_oncoming</code></h3>
+<p>双向直路上，自车以 12 m/s 接近前方 7 m/s 的慢车，2 s 后借对向车道开始超车；
+对向车道有一辆 11 m/s 的车驶来。双方距离缩到 55 m 时，自车放弃超车，
+回到原车道并线性减速到慢车速度，最终跟在前车后方，无碰撞。</p>
+<div class="highlight"><pre><span></span><code>借对向车道超车时对面有车驶来，只好放弃超车
+超车到一半发现对向来车，赶紧回到原车道
+</code></pre></div>
+<p><img alt="借道超车遇对向来车" src="../img/scenario_overtake_oncoming.gif"/></p>
+<div align="center"><i>overtake_oncoming：借左车道超车 → 对向车接近 → 放弃超车回原车道（红圈为对向车，黄圈为慢车，11 帧）</i></div>
+<table>
+<thead>
+<tr>
+<th>参数</th>
+<th>默认</th>
+<th>说明</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ego_speed</code></td>
+<td>12 m/s</td>
+<td>自车超车速度</td>
+</tr>
+<tr>
+<td><code>lead_speed</code></td>
+<td>7 m/s</td>
+<td>前方慢车速度</td>
+</tr>
+<tr>
+<td><code>gap</code></td>
+<td>45 m</td>
+<td>自车与慢车的初始距离</td>
+</tr>
+<tr>
+<td><code>oncoming_speed</code></td>
+<td>11 m/s</td>
+<td>对向车速度</td>
+</tr>
+<tr>
+<td><code>oncoming_gap</code></td>
+<td>170 m</td>
+<td>对向车与自车的初始距离</td>
+</tr>
+<tr>
+<td><code>lc_delay</code></td>
+<td>2.0 s</td>
+<td>开始借道超车的时刻</td>
+</tr>
+<tr>
+<td><code>abort_gap</code></td>
+<td>55 m</td>
+<td>放弃超车、回到原车道的相对距离阈值</td>
+</tr>
+</tbody>
+</table>
+<p>触发用的是<strong>相对距离</strong>：<code>oncoming</code> 与自车的中心距小于 <code>abort_gap</code> 时，
+同一时刻触发两个动作——自车回原车道、自车减速到 <code>lead_speed</code>。
+与 <code>overtake</code> 的区别是多了对向车的存在与"放弃超车"的判定，
+<code>overtake</code> 只演示变道超越，不处理会车冲突。</p>
 <h2 id="4-对话示例">4. 对话示例</h2>
 <div class="highlight"><pre><span></span><code>列出所有可用的场景模板
 用 cut_in 模板生成一个场景，随机种子设为 42

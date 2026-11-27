@@ -22,6 +22,9 @@ import os
 import xml.etree.ElementTree as ET
 import random
 import math
+import threading
+import shutil
+import time
 from pathlib import Path
 from fastapi.responses import FileResponse
 # 添加src目录到Python路径
@@ -4000,8 +4003,308 @@ class CarlaClient:
         return result
 
 
+AIR_SIM_SETTINGS_TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                         "AirSimConfig", "settings.json")
+
+
+def ensure_airsim_settings():
+    """保证 AirSim 能读到配置文件。
+
+    AirSim 插件只认 ~/Documents/AirSim/settings.json
+    （Windows 为 C:\\Users\\<用户名>\\Documents\\AirSim\\settings.json）。
+    仓库里带了模板 llm/AirSimConfig/settings.json，目标位置没有时就自动复制一份，
+    这样别人克隆下来不用手工建文件也能直接连无人机。已存在则绝不覆盖。
+    返回 (状态, 目标路径)，状态取值：created / existing / existing-other / no-template / failed
+    """
+    target = Path.home() / "Documents" / "AirSim" / "settings.json"
+    if target.exists():
+        try:
+            content = target.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            content = ""
+        return ("existing" if "Multirotor" in content else "existing-other"), target
+    if not os.path.exists(AIR_SIM_SETTINGS_TEMPLATE):
+        return "no-template", target
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(AIR_SIM_SETTINGS_TEMPLATE, target)
+        return "created", target
+    except Exception:
+        return "failed", target
+
+
+class AirSimClientWrapper:
+    """AirSim 无人机客户端封装。坐标采用 NED：x 北、y 东、z 下（高度用 -z 表示）。"""
+
+    def __init__(self):
+        self.client = None
+        self.capture_client = None   # 独立连接，用于巡航中并发截图
+        self.ip = None
+        self.port = None
+        self.home_z = None
+        self.last_image = None       # 最近一次航拍图片的绝对路径
+        self.cruise_task = None
+        self.cruise_stop_flag = False
+        self.cruise_info = {"running": False, "index": 0, "total": 0, "loop": 0, "loops": 0, "waypoint": ""}
+        self.cap_lock = threading.Lock()   # capture_client 上的状态读取/截图串行化
+
+    def _read_client(self):
+        """读状态/截图走独立连接，避免和正在 join 的飞行指令抢同一条 RPC 通道。"""
+        return self.capture_client or self._require()
+
+    def _require(self):
+        if self.client is None:
+            raise RuntimeError("未连接 AirSim，请先执行 connect_air（默认 127.0.0.1:41451）")
+        return self.client
+
+    def _state_sync(self):
+        with self.cap_lock:
+            s = self._read_client().getMultirotorState()
+        pos = s.kinematics_estimated.position
+        vel = s.kinematics_estimated.linear_velocity
+        speed = math.sqrt(vel.x_val ** 2 + vel.y_val ** 2 + vel.z_val ** 2)
+        raw = int(getattr(s, "landed_state", 0))
+        landed = {0: "Landed", 1: "Flying", 2: "Landing", 3: "Offboard"}.get(raw, str(raw))
+        alt = (self.home_z - pos.z_val) if self.home_z is not None else -pos.z_val
+        return {
+            "x": round(pos.x_val, 2),
+            "y": round(pos.y_val, 2),
+            "altitude": round(alt, 2),
+            "speed": round(speed, 2),
+            "landed_state": landed,
+        }
+
+    async def _run(self, fn, timeout=30):
+        """AirSim 是阻塞式 API，放到线程池执行，避免卡住 FastAPI 事件循环。"""
+        return await asyncio.wait_for(asyncio.to_thread(fn), timeout=timeout)
+
+    async def connect(self, ip="127.0.0.1", port=41451):
+        status, settings_path = ensure_airsim_settings()
+        note = ""
+        if status == "created":
+            note = f"\n（本机缺少 AirSim 配置，已按仓库模板生成：{settings_path}；重启模拟器后生效）"
+        elif status == "existing-other":
+            note = f"\n（提示：{settings_path} 的 SimMode 不是 Multirotor，无人机可能不会生成）"
+
+        def _do():
+            import airsim
+            c = airsim.MultirotorClient(ip=ip, port=port)
+            c.confirmConnection()
+            c.enableApiControl(True)
+            c.armDisarm(True)
+            try:
+                cap = airsim.MultirotorClient(ip=ip, port=port)
+                cap.confirmConnection()
+            except Exception:
+                cap = c
+            return c, cap
+
+        self.client, self.capture_client = await self._run(_do, timeout=25)
+        self.ip, self.port = ip, port
+        pos = await self._run(lambda: self._require().getMultirotorState().kinematics_estimated.position,
+                              timeout=10)
+        self.home_z = pos.z_val
+        st = await self.state()
+        return (f"✅ AirSim 无人机已连接 ({ip}:{port})，当前位置 x={st['x']} y={st['y']} "
+                f"高度={st['altitude']}m，状态={st['landed_state']}{note}")
+
+    async def state(self):
+        return await self._run(self._state_sync, timeout=15)
+
+    async def takeoff(self, altitude=10.0, timeout=20):
+        def _do():
+            c = self._require()
+            c.takeoffAsync(timeout_sec=timeout).join()
+            pos = c.getMultirotorState().kinematics_estimated.position
+            base = self.home_z if self.home_z is not None else 0.0
+            c.moveToPositionAsync(pos.x_val, pos.y_val, base - abs(float(altitude)), 3.0,
+                                  timeout_sec=max(int(timeout), 20)).join()
+
+        await self._run(_do, timeout=timeout + 30)
+        st = await self.state()
+        return f"✅ 已起飞并升到 {st['altitude']}m（x={st['x']}, y={st['y']}）"
+
+    async def land(self, timeout=20):
+        def _do():
+            c = self._require()
+            pos = c.getMultirotorState().kinematics_estimated.position
+            base = self.home_z if self.home_z is not None else 0.0
+            # AirSim 的 landAsync 下降很慢，且部分地图点没有地面碰撞会穿地；
+            # 这里改为垂直降到起飞基准高度附近后悬停，保证不继续下坠。
+            c.moveToPositionAsync(pos.x_val, pos.y_val, base - 0.3, 2.0,
+                                  timeout_sec=max(int(timeout), 30)).join()
+            c.hoverAsync().join()
+
+        await self._run(_do, timeout=timeout + 30)
+        st = await self.state()
+        return (f"✅ 已降到地面高度并悬停，高度 {st['altitude']}m，"
+                f"状态={st['landed_state']}（如需完全落地请用 reset_drone 回起点）")
+
+    async def fly_to(self, x, y, altitude=30.0, speed=5.0, timeout=30):
+        def _do():
+            base_z = self.home_z if self.home_z is not None else 0.0
+            self._require().moveToPositionAsync(
+                float(x), float(y), base_z - abs(float(altitude)), float(speed), timeout_sec=timeout
+            ).join()
+
+        await self._run(_do, timeout=timeout + 15)
+        st = await self.state()
+        return (f"✅ 已到达目标点 (x={x}, y={y}, 高度={altitude}m)，"
+                f"当前位置 x={st['x']} y={st['y']} 高度={st['altitude']}m")
+
+    async def capture(self, camera="0", file_name=""):
+        def _do():
+            import airsim
+            # 截图用独立连接，巡航/飞行中也能并发取帧，不会和飞行指令抢同一个 RPC 通道
+            c = self._read_client()
+            with self.cap_lock:
+                img = c.simGetImage(str(camera), airsim.ImageType.Scene)
+            if not img:
+                raise RuntimeError("相机返回空图像，请确认相机编号（默认 0）")
+            out_dir = os.path.join(os.path.dirname(__file__), "output", "air")
+            os.makedirs(out_dir, exist_ok=True)
+            name = file_name or f"drone_{time.strftime('%Y%m%d_%H%M%S')}.png"
+            if not name.lower().endswith(".png"):
+                name += ".png"
+            path = os.path.join(out_dir, name)
+            with open(path, "wb") as f:
+                f.write(img)
+            return path
+
+        path = await self._run(_do, timeout=20)
+        self.last_image = path
+        return f"✅ 航拍图已保存: {path}"
+
+    # ============ 巡航（沿固定航点飞行） ============
+
+    def _cruise_waypoints(self, waypoints, size=20.0):
+        """解析航点。支持 "x,y;x,y" / [[x,y],...] / "" 空则用当前位置的正方形航线。"""
+        if isinstance(waypoints, str):
+            txt = waypoints.strip()
+            if not txt:
+                pts = []
+            else:
+                pts = []
+                for seg in txt.replace("|", ";").split(";"):
+                    seg = seg.strip().strip("()[]")
+                    if not seg:
+                        continue
+                    parts = [p for p in seg.replace("，", ",").split(",") if p.strip()]
+                    if len(parts) < 2:
+                        raise ValueError(f"航点格式不对：{seg}，应为 x,y")
+                    pts.append((float(parts[0]), float(parts[1])))
+        else:
+            pts = [(float(p[0]), float(p[1])) for p in waypoints]
+
+        if not pts:
+            pos = self._require().getMultirotorState().kinematics_estimated.position
+            x0, y0 = pos.x_val, pos.y_val
+            pts = [(x0 + size, y0), (x0 + size, y0 + size), (x0, y0 + size), (x0, y0)]
+        return pts
+
+    async def cruise(self, waypoints="", altitude=10.0, speed=6.0, loops=1):
+        if self.cruise_task is not None and not self.cruise_task.done():
+            return "⚠️ 已经在巡航中，先执行 stop_cruise 再重新规划航线"
+
+        try:
+            pts = await self._run(lambda: self._cruise_waypoints(waypoints), timeout=10)
+        except Exception as e:
+            return f"❌ 航点解析失败：{e}"
+
+        self.cruise_stop_flag = False
+        loops = int(loops or 0)
+        self.cruise_info = {"running": True, "index": 0, "total": len(pts),
+                            "loop": 0, "loops": loops, "waypoint": ""}
+        self.cruise_task = asyncio.create_task(self._cruise_loop(pts, float(altitude), float(speed), loops))
+        route = " -> ".join(f"({x:g},{y:g})" for x, y in pts)
+        loop_txt = "无限巡航" if loops <= 0 else f"{loops} 圈"
+        return (f"✅ 已开始巡航：{len(pts)} 个航点，{loop_txt}，高度 {altitude}m，速度 {speed}m/s\n"
+                f"航线：{route}\n（后台执行，可同时用航拍按钮拍照；用 stop_cruise 停止）")
+
+    async def _cruise_loop(self, pts, altitude, speed, loops):
+        target_z = (self.home_z if self.home_z is not None else 0.0) - abs(altitude)  # 全程固定高度
+        st = self.cruise_info
+        try:
+            lap = 0
+            while (loops <= 0 or lap < loops) and not self.cruise_stop_flag:
+                lap += 1
+                st["loop"] = lap
+                for i, (wx, wy) in enumerate(pts):
+                    if self.cruise_stop_flag:
+                        break
+                    st["index"] = i + 1
+                    st["waypoint"] = f"({wx:g},{wy:g})"
+                    try:
+                        await self._run(
+                            lambda x=wx, y=wy: self._require().moveToPositionAsync(
+                                x, y, target_z, speed, timeout_sec=60).join(),
+                            timeout=70)
+                    except Exception:
+                        # 单点超时/被 cancelLastTask 打断时不中断整条航线
+                        continue
+        finally:
+            st["running"] = False
+            try:
+                await self._run(lambda: self._require().hoverAsync().join(), timeout=15)
+            except Exception:
+                pass
+
+    async def stop_cruise(self):
+        self.cruise_stop_flag = True
+
+        def _do():
+            c = self._require()
+            try:
+                c.cancelLastTask()
+            except Exception:
+                pass
+            try:
+                c.hoverAsync().join()
+            except Exception:
+                pass
+
+        await self._run(_do, timeout=20)
+        self.cruise_info["running"] = False
+        st = await self.state()
+        return f"🛑 已停止巡航并悬停，当前位置 x={st['x']} y={st['y']} 高度={st['altitude']}m"
+
+    async def cruise_status(self):
+        st = await self.state()
+        info = self.cruise_info
+        running = bool(self.cruise_task is not None and not self.cruise_task.done())
+        loops_txt = "无限" if info["loops"] <= 0 else str(info["loops"])
+        if running:
+            return (f"🛰 巡航中：第 {info['loop']}/{loops_txt} 圈，"
+                    f"航点 {info['index']}/{info['total']} {info['waypoint']}，"
+                    f"当前 x={st['x']} y={st['y']} 高度={st['altitude']}m 速度={st['speed']}m/s")
+        return (f"🛰 巡航未在运行，当前位置 x={st['x']} y={st['y']} "
+                f"高度={st['altitude']}m 速度={st['speed']}m/s")
+
+    async def reset(self):
+        def _do():
+            c = self._require()
+            c.reset()
+            c.confirmConnection()
+            c.enableApiControl(True)
+            c.armDisarm(True)
+
+        await self._run(_do, timeout=30)
+        pos = await self._run(lambda: self._require().getMultirotorState().kinematics_estimated.position,
+                              timeout=10)
+        self.home_z = pos.z_val
+        st = await self.state()
+        return f"✅ 无人机已重置，位置 x={st['x']} y={st['y']} 高度={st['altitude']}m"
+
+
 # 全局客户端实例
 carla_client = CarlaClient()
+air_client = AirSimClientWrapper()
+
+# 进程启动即准备好 AirSim 配置：插件只在模拟器启动时读一次，晚于模拟器就没用
+try:
+    ensure_airsim_settings()
+except Exception:
+    pass
 
 async def connect_carla_impl(host: str = 'localhost', port: int = 2000) -> str:
     success = await carla_client.connect(host, port)
@@ -4858,6 +5161,218 @@ async def scenario_unprotected_turn(map_name: Optional[str] = None,
     return await scenario_unprotected_turn_impl(map_name, reference_id=reference_id,
                                                 relative_distance=relative_distance,
                                                 relative_angle=relative_angle)
+
+
+# ============ AirSim 无人机（空中端）工具 ============
+
+@mcp.tool()
+async def connect_air(ip: str = "127.0.0.1", port: int = 41451) -> str:
+    """连接 AirSim 无人机仿真（CarlaAir/HUTB 的 AIR 模式，默认端口 41451）"""
+    return await air_client.connect(ip, port)
+
+
+@mcp.tool()
+async def get_drone_state() -> str:
+    """获取无人机状态：NED 坐标、离地高度、速度、是否着陆"""
+    st = await air_client.state()
+    return (f"📡 无人机状态: x={st['x']} y={st['y']} 高度={st['altitude']}m "
+            f"速度={st['speed']}m/s 状态={st['landed_state']}")
+
+
+@mcp.tool()
+async def takeoff_drone(altitude: float = 10.0, timeout: int = 20) -> str:
+    """无人机起飞并升到指定离地高度（默认 10 米）"""
+    return await air_client.takeoff(altitude, timeout)
+
+
+@mcp.tool()
+async def land_drone(timeout: int = 20) -> str:
+    """无人机降落"""
+    return await air_client.land(timeout)
+
+
+@mcp.tool()
+async def fly_drone_to(x: float, y: float, altitude: float = 30.0,
+                       speed: float = 5.0, timeout: int = 30) -> str:
+    """无人机飞往指定点。x=北向坐标，y=东向坐标，altitude=离地高度（米），speed=飞行速度（m/s）"""
+    return await air_client.fly_to(x, y, altitude, speed, timeout)
+
+
+@mcp.tool()
+async def capture_drone_image(camera: str = "0", file_name: str = "") -> str:
+    """用无人机机载相机截图，保存到 llm/output/air"""
+    return await air_client.capture(camera, file_name)
+
+
+@mcp.tool()
+async def reset_drone() -> str:
+    """重置无人机到初始位置并重新解锁"""
+    return await air_client.reset()
+
+
+@mcp.tool()
+async def cruise_drone(waypoints: str = "", altitude: float = 10.0,
+                       speed: float = 6.0, loops: int = 1) -> str:
+    """沿固定航点巡航。waypoints 形如 "0,0;20,0;20,20;0,20"，留空则用当前位置的正方形 20*20 米航线；loops=0 表示无限巡航"""
+    return await air_client.cruise(waypoints, altitude, speed, loops)
+
+
+@mcp.tool()
+async def stop_cruise() -> str:
+    """停止巡航并悬停"""
+    return await air_client.stop_cruise()
+
+
+@mcp.tool()
+async def get_cruise_status() -> str:
+    """查询巡航进度（第几圈、第几个航点、当前位置）"""
+    return await air_client.cruise_status()
+
+
+# ============ 小车 / 无人机 模式切换 ============
+
+def _current_map_name() -> str:
+    """取当前地图短名（Carla/Maps/Town10HD -> Town10HD）"""
+    try:
+        name = carla_client.world.get_map().name.split("/")[-1]
+    except Exception:
+        name = ""
+    if not name or name.startswith("OpenDrive"):
+        name = "Town10HD"
+    return name
+
+
+def _port_open(port: int) -> bool:
+    try:
+        s = socket.create_connection(("127.0.0.1", port), timeout=1)
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
+async def _wait_port(port: int, timeout: float = 120.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _port_open(port):
+            return True
+        await asyncio.sleep(1)
+    return False
+
+
+def _simulator_launch_info():
+    root = Path(__file__).parent.parent / "hutb"
+    shipping = root / "CarlaUE4" / "Binaries" / "Win64" / "CarlaUE4-Win64-Shipping.exe"
+    if shipping.exists():
+        return str(shipping), True, str(root)
+    root_exe = root / "CarlaUE4.exe"
+    if root_exe.exists():
+        return str(root_exe), False, str(root)
+    return None, False, None
+
+
+def _kill_simulator_processes():
+    taskkill = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "taskkill.exe")
+    for name in ("CarlaUE4-Win64-Shipping.exe", "CarlaUE4.exe"):
+        try:
+            subprocess.run([taskkill, "/F", "/IM", name], capture_output=True, text=True, timeout=15)
+        except Exception:
+            pass
+
+
+async def switch_sim_mode_impl(mode: str = "car") -> str:
+    """重启模拟器进程并以指定 GameMode 启动：car -> ?GAME=CARLA，air -> ?GAME=AIR。
+    不用 load_world 热切换：实测 ?GAME 选项会让 UE 主线程卡死。
+    """
+    mode = (mode or "").strip().lower()
+    if mode in ("car", "carla", "vehicle", "小车", "车"):
+        target = "car"
+    elif mode in ("air", "drone", "uav", "无人机"):
+        target = "air"
+    else:
+        return "❌ 不支持的模式，只能是 car（小车）或 air（无人机）"
+
+    exe, needs_project, cwd = _simulator_launch_info()
+    if not exe:
+        return "❌ 找不到 CarlaUE4 可执行文件，请确认项目里的 hutb 目录完整"
+
+    map_name = _current_map_name()
+    game = "AIR" if target == "air" else "CARLA"
+    world_name = f"{map_name}?GAME={game}"
+    app_logger.info(f"🔁 重启模拟器切换模式: {world_name}")
+
+    _kill_simulator_processes()
+    # 切无人机前先保证 AirSim 配置文件就位（AirSim 只在启动时读一次 settings.json）
+    if target == "air":
+        status, settings_path = ensure_airsim_settings()
+        if status == "created":
+            app_logger.info(f"📝 已生成 AirSim 配置: {settings_path}")
+        elif status in ("existing-other", "no-template", "failed"):
+            app_logger.warning(f"⚠️ AirSim 配置未就绪({status}): {settings_path}，无人机可能无法生成")
+    for _ in range(15):
+        if not _port_open(2000):
+            break
+        await asyncio.sleep(1)
+    await asyncio.sleep(2)
+
+    args = [exe]
+    if needs_project:
+        args.append("CarlaUE4")
+    args += [
+        world_name, "-windowed", "-ResX=1280", "-ResY=720",
+        "-carla-rpc-port=2000", "-quality-level=Epic", "-TexturePoolSize=2048",
+        "-unattended", "-nosound", "-UseVSync",
+    ]
+    try:
+        subprocess.Popen(args, cwd=cwd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
+    except Exception as e:
+        return f"❌ 启动模拟器失败：{e}"
+
+    if not await _wait_port(2000, 150):
+        return "❌ 模拟器 150 秒内没有监听 2000 端口，请查看 hutb\\CarlaAir.log 或手动启动 mcp.bat"
+
+    # 重建 CARLA 客户端，清掉旧连接和旧场景状态
+    def _reconnect_carla():
+        c = carla.Client("127.0.0.1", 2000)
+        c.set_timeout(30)
+        return c, c.get_world()
+
+    try:
+        client, world = await asyncio.wait_for(asyncio.to_thread(_reconnect_carla), timeout=60)
+    except Exception as e:
+        return f"❌ 模拟器已启动，但 CARLA 连接失败：{e}"
+
+    carla_client.client = client
+    carla_client.world = world
+    carla_client.actors = []
+    carla_client.walker_controllers = {}
+    carla_client.walker_goals = {}
+    carla_client.current_view_mode = "spectator"
+    carla_client.view_target = None
+    carla_client._tm_used = False
+    air_client.client = None
+    air_client.home_z = None
+
+    if target == "car":
+        return (f"✅ 已重启为小车模式（{world_name}）。场景已清空，"
+                "要跟车请先生成车辆，再调 switch_view(third_person)。")
+
+    if not await _wait_port(41451, 90):
+        return (f"⚠️ 已以 AIR 模式启动（{world_name}），但 41451 端口 90 秒内未就绪。"
+                "请稍后点“🔗 连接无人机”重试。")
+
+    try:
+        msg = await air_client.connect()
+        return f"✅ 已重启为无人机模式（{world_name}）。{msg}"
+    except Exception as e:
+        return f"⚠️ AIR 模式已启动，但无人机连接失败：{e}；请稍后点“🔗 连接无人机”重试"
+
+
+@mcp.tool()
+async def switch_sim_mode(mode: str = "car") -> str:
+    """切换仿真模式：mode=car（小车/CARLA）或 mode=air（无人机/AirSim）。会重载地图，场景清空。"""
+    return await switch_sim_mode_impl(mode)
 
 
 # ============================================================================
@@ -7376,6 +7891,162 @@ class FastMCPGitHubAssistant:
                         "required": []
                     }
                 }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "switch_sim_mode",
+                    "description": "切换仿真模式：car=小车（CARLA 视角），air=无人机（AirSim）。会重启模拟器进程（约 60-90 秒）并清空场景。当用户说'切换到小车'、'改成无人机'、'换模式'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "mode": {"type": "string", "description": "car 或 air", "enum": ["car", "air"], "default": "car"}
+                        },
+                        "required": ["mode"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "connect_air",
+                    "description": "连接 AirSim 无人机仿真（HUTB 的 AIR 模式，默认端口 41451）。当用户要求'连接无人机'、'连接AirSim'、'起飞无人机'前使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "ip": {"type": "string", "description": "AirSim 服务地址", "default": "127.0.0.1"},
+                            "port": {"type": "integer", "description": "AirSim API 端口", "default": 41451}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_drone_state",
+                    "description": "获取无人机状态：NED 坐标(x北/y东)、离地高度(米)、速度(m/s)、是否着陆。当用户询问'无人机在哪'、'飞多高'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "takeoff_drone",
+                    "description": "无人机起飞并升到指定离地高度（默认10米）后悬停。当用户要求'起飞'、'让无人机升空'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "altitude": {"type": "number", "description": "起飞后目标离地高度（米）", "default": 10.0},
+                            "timeout": {"type": "integer", "description": "起飞超时时间（秒）", "default": 20}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "land_drone",
+                    "description": "无人机降落。当用户要求'降落'、'落地'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "timeout": {"type": "integer", "description": "降落超时时间（秒）", "default": 20}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "fly_drone_to",
+                    "description": "无人机飞往指定点。x=北向坐标，y=东向坐标，altitude=离地高度（米，正数），speed=飞行速度（米/秒）。当用户说'飞到某点'、'飞到30米高'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "x": {"type": "number", "description": "NED 北向坐标 x（米）"},
+                            "y": {"type": "number", "description": "NED 东向坐标 y（米）"},
+                            "altitude": {"type": "number", "description": "离地高度（米）", "default": 30.0},
+                            "speed": {"type": "number", "description": "飞行速度（米/秒）", "default": 5.0},
+                            "timeout": {"type": "integer", "description": "飞行超时时间（秒）", "default": 30}
+                        },
+                        "required": ["x", "y"]
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "capture_drone_image",
+                    "description": "用无人机机载相机截图并保存为 PNG。当用户要求'航拍'、'无人机拍照'、'截图看看'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "camera": {"type": "string", "description": "相机编号，默认 0（前视）", "default": "0"},
+                            "file_name": {"type": "string", "description": "文件名，留空自动按时间命名", "default": ""}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "reset_drone",
+                    "description": "把无人机重置回初始位置并重新解锁。当用户要求'重置无人机'、'无人机回原点'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "cruise_drone",
+                    "description": "沿固定航点巡航（全程保持同一高度）。当用户说'巡航'、'沿路线飞一圈'、'巡逻'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "waypoints": {"type": "string", "description": "航点串，形如 \"0,0;20,0;20,20;0,20\"（x北,y东，分号分隔）；留空=从当前位置起飞的正方形20*20米航线", "default": ""},
+                            "altitude": {"type": "number", "description": "巡航离地高度（米）", "default": 10.0},
+                            "speed": {"type": "number", "description": "巡航速度（米/秒）", "default": 6.0},
+                            "loops": {"type": "integer", "description": "绕圈次数，0 表示无限巡航直到 stop_cruise", "default": 1}
+                        },
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "stop_cruise",
+                    "description": "停止巡航并原地悬停。当用户说'停止巡航'、'停下'、'别飞了'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_cruise_status",
+                    "description": "查询巡航进度：当前第几圈、第几个航点、位置与高度。当用户问'飞到哪了'、'巡航进度'时使用。",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                    }
+                }
             }
         ] 
 
@@ -7405,10 +8076,16 @@ class FastMCPGitHubAssistant:
 
     async def call_deepseek_with_tools(self, messages):
         """调用Deepseek API，包含FastMCP工具定义"""
+        if not config.DEEPSEEK_API_KEY:
+            raise Exception(
+                "未配置 DEEPSEEK_API_KEY：请在项目根目录 .env 中填写有效 Key"
+                "（申请地址 https://platform.deepseek.com/api_keys），然后重启 mcp.bat。"
+            )
+
         headers = config.get_deepseek_headers()
 
         data = {
-            "model": "deepseek-chat",
+            "model": config.DEEPSEEK_MODEL,
             "messages": messages,
             "tools": self.tools,
             "tool_choice": "auto",
@@ -7416,13 +8093,53 @@ class FastMCPGitHubAssistant:
             "temperature": 0.7
         }
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(config.DEEPSEEK_API_URL, headers=headers, json=data) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    error_text = await response.text()
-                    raise Exception(f"Deepseek API调用失败: {response.status} - {error_text}")
+        timeout = aiohttp.ClientTimeout(total=90)
+        attempts = 3
+        last_err = None
+        for attempt in range(1, attempts + 1):
+            try:
+                # force_close 避免复用被中间设备/热点掐断的长连接
+                connector = aiohttp.TCPConnector(force_close=True)
+                async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
+                    async with session.post(config.DEEPSEEK_API_URL, headers=headers, json=data) as response:
+                        if response.status == 200:
+                            return await response.json()
+
+                        error_text = await response.text()
+                        if response.status >= 500:
+                            # 网关/CDN 偶发 5xx（含非标准 550），按可重试处理
+                            if attempt < attempts:
+                                app_logger.warning(
+                                    f"DeepSeek 服务端返回 HTTP {response.status}，第 {attempt}/{attempts} 次，准备重试"
+                                )
+                                await asyncio.sleep(2 * attempt)
+                                continue
+                            raise Exception(
+                                f"DeepSeek 服务端错误（HTTP {response.status}，已重试 {attempts} 次），请稍后重试。"
+                                f" 原始信息：{error_text[:200]}"
+                            )
+                        if response.status == 401:
+                            hint = ("DeepSeek API Key 无效或已过期（401）。"
+                                    "请确认 Key 来自 https://platform.deepseek.com/api_keys，"
+                                    "并填到项目根目录 .env 后重启 mcp.bat。")
+                        elif response.status == 402:
+                            hint = ("DeepSeek 账户余额不足（402）。"
+                                    "请到 https://platform.deepseek.com/top_up 充值后再试。")
+                        elif response.status == 429:
+                            hint = "DeepSeek 请求过于频繁（429），请稍后重试。"
+                        else:
+                            hint = f"DeepSeek API 调用失败（HTTP {response.status}）。"
+                        raise Exception(f"{hint} 原始信息：{error_text[:200]}")
+            except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                last_err = e
+                app_logger.warning(f"DeepSeek 请求失败（第 {attempt}/{attempts} 次）：{e!r}")
+                if attempt < attempts:
+                    await asyncio.sleep(2 * attempt)
+                    continue
+                raise Exception(
+                    f"无法连接 DeepSeek API（网络或代理问题，已重试 {attempts} 次）：{last_err}。"
+                    "若使用代理/VPN，请确认其允许本程序访问 api.deepseek.com。"
+                )
 
     async def execute_fastmcp_tool_call(self, tool_call):
         """执行FastMCP工具调用 - 桥接到FastMCP装饰器函数"""
@@ -8040,6 +8757,68 @@ class FastMCPGitHubAssistant:
                 )
                 return {"success": True, "data": result}
 
+            elif function_name == "switch_sim_mode":
+                result = await switch_sim_mode_impl(arguments.get("mode", "car"))
+                return {"success": True, "data": result}
+
+            elif function_name == "connect_air":
+                result = await air_client.connect(
+                    arguments.get("ip", "127.0.0.1"), int(arguments.get("port", 41451))
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "get_drone_state":
+                st = await air_client.state()
+                result = (f"📡 无人机状态: x={st['x']} y={st['y']} 高度={st['altitude']}m "
+                          f"速度={st['speed']}m/s 状态={st['landed_state']}")
+                return {"success": True, "data": result}
+
+            elif function_name == "takeoff_drone":
+                result = await air_client.takeoff(
+                    float(arguments.get("altitude", 10.0)), int(arguments.get("timeout", 20))
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "land_drone":
+                result = await air_client.land(int(arguments.get("timeout", 20)))
+                return {"success": True, "data": result}
+
+            elif function_name == "fly_drone_to":
+                result = await air_client.fly_to(
+                    float(arguments["x"]), float(arguments["y"]),
+                    float(arguments.get("altitude", 30.0)),
+                    float(arguments.get("speed", 5.0)),
+                    int(arguments.get("timeout", 30))
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "capture_drone_image":
+                result = await air_client.capture(
+                    str(arguments.get("camera", "0")), arguments.get("file_name", "")
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "reset_drone":
+                result = await air_client.reset()
+                return {"success": True, "data": result}
+
+            elif function_name == "cruise_drone":
+                result = await air_client.cruise(
+                    arguments.get("waypoints", "") or "",
+                    float(arguments.get("altitude", 10.0)),
+                    float(arguments.get("speed", 6.0)),
+                    int(arguments.get("loops", 1))
+                )
+                return {"success": True, "data": result}
+
+            elif function_name == "stop_cruise":
+                result = await air_client.stop_cruise()
+                return {"success": True, "data": result}
+
+            elif function_name == "get_cruise_status":
+                result = await air_client.cruise_status()
+                return {"success": True, "data": result}
+
             else:
                 return {
                     "success": False,
@@ -8559,7 +9338,11 @@ class FastMCPGitHubAssistant:
 
     async def run_tool_direct(self, tool, arguments):
         """不经过大模型，直接执行工具（快捷按钮与文字意图共用）。"""
-        if tool != "connect_carla":
+        _air_only_tools = {"connect_air", "get_drone_state", "takeoff_drone", "land_drone",
+                           "fly_drone_to", "capture_drone_image", "reset_drone",
+                           "cruise_drone", "stop_cruise", "get_cruise_status",
+                           "switch_sim_mode"}
+        if tool != "connect_carla" and tool not in _air_only_tools:
             healthy = False
             if carla_client.world is not None and getattr(carla_client, "client", None) is not None:
                 try:
@@ -8723,6 +9506,33 @@ CARLA仿真功能：
 38. run_scenario_in_carla - 在 CARLA 中播放 OpenSCENARIO 场景，参数：template(模板名，默认lead_brake)、xosc_path、xodr_layout、duration、capture_times、map_name(内置地图)
    可播放模板：cut_in/lead_brake/lead_stationary/crossing_hazard/low_overlap/wrong_way/unprotected_turn/junction_light/close_follow/overtake/evasive_swerve/signal_phase
 39. run_traffic_light_demo - 红绿灯相位演示（红灯等待→切绿起步），参数：map_name(默认Town03)、red_hold、duration、capture_times
+
+AirSim 无人机（空中端）功能：
+38. connect_air - 连接 AirSim 无人机仿真（默认 127.0.0.1:41451）。调用任何无人机工具前必须先连接
+39. get_drone_state - 获取无人机状态：NED 坐标(x北/y东)、离地高度、速度、是否着陆
+40. takeoff_drone - 无人机起飞并升到指定高度，参数：altitude(离地高度米, 默认10), timeout(默认20秒)
+41. land_drone - 无人机降落，参数：timeout(默认20秒)
+42. fly_drone_to - 飞到指定点，参数：x(北向米), y(东向米), altitude(离地高度米, 默认30), speed(默认5m/s), timeout(默认30秒)
+43. capture_drone_image - 机载相机截图，参数：camera(默认"0"), file_name(留空自动命名)，保存到 llm/output/air
+44. reset_drone - 重置无人机到初始位置并重新解锁
+45. cruise_drone - 沿固定航点巡航（全程同一高度），参数：waypoints(如"0,0;20,0;20,20"，留空=当前位置正方形20*20米), altitude(默认10), speed(默认6), loops(默认1，0=无限)
+46. stop_cruise - 停止巡航并悬停
+47. get_cruise_status - 查询巡航进度（第几圈、第几个航点、当前位置）
+48. switch_sim_mode - 切换小车/无人机模式，参数：mode(car 或 air)。会重启模拟器进程（约 60-90 秒）并清空场景
+
+模式切换规则：
+- 用户说"切换到小车"、"改成小车模式"时，调用 switch_sim_mode(mode="car")
+- 用户说"切换到无人机"、"改成无人机模式"时，调用 switch_sim_mode(mode="air")
+- 切换会清空所有车辆和行人，切换后需要重新生成；切到 air 后先确认 connect_air 成功
+
+无人机使用规则：
+- 用户提到"无人机"、"飞机"、"起飞"、"降落"、"航拍"、"飞高一点"时，使用 AirSim 无人机工具，不要用 CARLA 车辆工具
+- 第一次操作无人机前，若尚未连接，先调用 connect_air
+- 用户说"飞到XX米高"时，只改 altitude 参数，x/y 保持当前位置（先调 get_drone_state 获取）
+- 用户说"巡航"、"巡逻"、"沿路线飞一圈"时用 cruise_drone；巡航是后台任务，会立即返回，之后可用 get_cruise_status 查进度
+- 巡航中用户要拍照，直接调用 capture_drone_image（不必停止巡航），截图会保存在 llm/output/air 并显示在网页上
+- 用户说"停止巡航"时调用 stop_cruise
+- 无人机坐标是 NED：x 北、y 东、高度向上为正；不要给用户讲 z 轴负数
 
 
 参照物定位（重要）：
@@ -8983,6 +9793,15 @@ async def download_file(filename: str):
     return {"error": "文件不存在"}
 # ===== 新增结束 =====
 
+@app.get("/air_image/{filename}")
+async def air_image(filename: str):
+    """航拍图片在线预览：网页里的 <img> 直接引用这个地址"""
+    base = Path(__file__).parent / "output" / "air"
+    fp = base / filename
+    if fp.exists() and fp.suffix.lower() == ".png":
+        return FileResponse(path=str(fp), media_type="image/png")
+    return {"error": "图片不存在"}
+
 def get_web_interface():
     """生成AI对话Web界面HTML"""
     html_content = """
@@ -9074,6 +9893,15 @@ def get_web_interface():
                 word-wrap: break-word;
                 position: relative;
                 animation: messageSlide 0.3s ease-out;
+            }
+
+            .chat-img {
+                display: block;
+                max-width: 100%;
+                margin-top: 10px;
+                border-radius: 10px;
+                box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+                cursor: zoom-in;
             }
 
             @keyframes messageSlide {
@@ -9459,6 +10287,8 @@ def get_web_interface():
             }
             .qbtn-w1 { background: linear-gradient(135deg, #10b981, #059669); box-shadow: 0 2px 8px rgba(16, 185, 129, 0.3); }
             .qbtn-util { background: linear-gradient(135deg, #64748b, #475569); }
+            .qbtn-air { background: linear-gradient(135deg, #0ea5e9, #0284c7); box-shadow: 0 2px 8px rgba(14, 165, 233, 0.3); }
+            .qbtn-car { background: linear-gradient(135deg, #22c55e, #16a34a); box-shadow: 0 2px 8px rgba(34, 197, 94, 0.3); }
             .quick-note { font-size: 0.8em; color: #94a3b8; margin-top: 4px; }
         </style>
     </head>
@@ -9473,6 +10303,8 @@ def get_web_interface():
                     <div class="example-questions">
                          <div class="welcome-message">
                             👋 欢迎使用基于FastMCP框架的 HUTB 模拟器智能助手！集成 HUTB 仿真控制。
+                            <br><br>
+                            🔑 <strong>AI 对话</strong>需要有效的 DeepSeek API Key（项目根目录 <code>.env</code>）；下方“⚡ 场景快捷按钮”<strong>不需要 Key</strong>，可直接用。
                             <br><br>
                             🔧 <strong>技术特色</strong>：本助手使用FastMCP装饰器实现工具定义，提供类型安全、自动化的MCP体验！
                         </div>
@@ -9536,6 +10368,14 @@ def get_web_interface():
         </div>
 
         <div class="week-group">
+            <div class="week-label"><span style="color:#22c55e;">🔁 仿真模式（切换会重启模拟器，约 60-90 秒）</span></div>
+            <div class="quick-btns">
+                <button class="qbtn qbtn-car" onclick="runQuickTool('switch_sim_mode', {mode: 'car'}, this)">🚗 小车模式</button>
+                <button class="qbtn qbtn-air" onclick="runQuickTool('switch_sim_mode', {mode: 'air'}, this)">🚁 无人机模式</button>
+            </div>
+        </div>
+
+        <div class="week-group">
             <div class="week-label"><span class="w1">🛣️ 道路结构场景</span></div>
             <div class="quick-btns">
                 <button class="qbtn qbtn-w1" onclick="runQuickTool('scenario_highway_ramp', {ramp_type: 'on'}, this)">🛣️ 匝道汇入</button>
@@ -9578,6 +10418,21 @@ def get_web_interface():
                 <button class="qbtn" onclick="runQuickTool('scenario_low_overlap', {}, this)">📐 低重叠率目标</button>
                 <button class="qbtn" onclick="runQuickTool('scenario_wrong_way', {}, this)">↩️ 逆行</button>
                 <button class="qbtn" onclick="runQuickTool('scenario_unprotected_turn', {}, this)">🚗 无保护转弯</button>
+            </div>
+        </div>
+
+        <div class="week-group">
+            <div class="week-label"><span style="color:#0ea5e9;">🚁 无人机（AirSim）</span></div>
+            <div class="quick-btns">
+                <button class="qbtn qbtn-air" onclick="runQuickTool('connect_air', {}, this)">🔗 连接无人机</button>
+                <button class="qbtn qbtn-air" onclick="runQuickTool('takeoff_drone', {}, this)">🛫 起飞</button>
+                <button class="qbtn qbtn-air" onclick="runQuickTool('fly_drone_to', {x: 80, y: 0, altitude: 30, speed: 5}, this)">🧭 飞到(80,0,30m)</button>
+                <button class="qbtn qbtn-air" onclick="runQuickTool('get_drone_state', {}, this)">📡 无人机状态</button>
+                <button class="qbtn qbtn-air" onclick="runQuickTool('cruise_drone', {altitude: 10, speed: 6, loops: 1}, this)">🛰 巡航(方形20m)</button>
+                <button class="qbtn qbtn-air" onclick="runQuickTool('get_cruise_status', {}, this)">🛰 巡航进度</button>
+                <button class="qbtn qbtn-air" onclick="runQuickTool('stop_cruise', {}, this)">🛑 停止巡航</button>
+                <button class="qbtn qbtn-air" onclick="runQuickTool('capture_drone_image', {}, this)">📷 航拍截图</button>
+                <button class="qbtn qbtn-air" onclick="runQuickTool('land_drone', {}, this)">🛬 降落</button>
             </div>
         </div>
 
@@ -9639,6 +10494,9 @@ async function runQuickTool(tool, args, btn) {
     if (btn) { btn.disabled = true; btn.classList.add('running'); }
     const argStr = Object.entries(args || {}).map(([k, v]) => `${k}=${v}`).join(', ');
     addMessage(`⚡ 快捷执行：${tool}(${argStr})`, 'user');
+    if (tool === 'switch_sim_mode') {
+        addMessage('⏳ 正在重启模拟器并切换模式，约 60–90 秒，请勿关闭页面…', 'assistant');
+    }
     try {
         const form = new FormData();
         form.append('tool', tool);
@@ -9649,6 +10507,7 @@ async function runQuickTool(tool, args, btn) {
             ? [{ function: { name: tool, arguments: JSON.stringify(args || {}) } }]
             : null;
         addMessage(result.message || (result.success ? '✅ 执行完成' : '❌ 执行失败'), 'assistant', toolCalls);
+        if (result.image_url) addImage(result.image_url);
     } catch (error) {
         addMessage('❌ 请求失败: ' + error, 'assistant');
     } finally {
@@ -9688,6 +10547,7 @@ async function submitMessage() {
         if (response.ok) {
             const result = await response.json();
             addMessage(result.message, 'assistant', result.tool_calls);
+            if (result.image_url) addImage(result.image_url);
         } else {
             addMessage('抱歉，发生了错误，请稍后重试。', 'assistant');
         }
@@ -9699,12 +10559,27 @@ async function submitMessage() {
     }
 }
 
+function addImage(url) {
+    if (document.querySelector(`img.chat-img[src="${url}"]`)) return;   // 同一条消息已经贴出这张图就不重复贴
+    const messages = document.getElementById('messages');
+    const div = document.createElement('div');
+    div.className = 'message assistant-message';
+    div.innerHTML = `<a href="${url}" target="_blank"><img class="chat-img" src="${url}" alt="航拍图"></a>`;
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+}
+
 function addMessage(content, sender, toolCalls) {
     const messages = document.getElementById('messages');
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${sender}-message`;
 
-    let html = `<div>${content}</div>`;
+    // 文本里出现 output/air/xxx.png 时，直接在消息下面显示这张图
+    let attach = '';
+    const hit = String(content).match(/output[\\\/]+air[\\\/]+([^\\\/"']+\.png)/i);
+    if (hit) attach = `<a href="/air_image/${hit[1]}" target="_blank"><img class="chat-img" src="/air_image/${hit[1]}" alt="航拍图"></a>`;
+
+    let html = `<div>${content}</div>${attach}`;
 
     if (toolCalls && toolCalls.length > 0) {
         const toolsId = 'tools-' + Date.now();
@@ -9781,12 +10656,17 @@ async def index():
 async def chat(message: str = Form(...)):
     """处理聊天请求 - 使用FastMCP工具的AI对话"""
     try:
+        before = air_client.last_image
         result = await assistant.chat(message)
-        return {
+        payload = {
             "success": True,
             "message": result["message"],
             "tool_calls": result["tool_calls"]
         }
+        # 本轮如果产生了新航拍图，额外返回图片地址，前端直接显示
+        if air_client.last_image and air_client.last_image != before:
+            payload["image_url"] = f"/air_image/{os.path.basename(air_client.last_image)}"
+        return payload
     except Exception as e:
         app_logger.error(f"❌ FastMCP聊天处理失败: {str(e)}")
         return {
@@ -9805,7 +10685,10 @@ async def run_tool(tool: str = Form(...), args: str = Form("{}")):
         arguments = {}
     try:
         ok, message = await assistant.run_tool_direct(tool, arguments)
-        return {"success": ok, "message": message, "tool": tool}
+        payload = {"success": ok, "message": message, "tool": tool}
+        if ok and tool == "capture_drone_image" and air_client.last_image:
+            payload["image_url"] = f"/air_image/{os.path.basename(air_client.last_image)}"
+        return payload
     except Exception as e:
         app_logger.error(f"❌ 快捷工具执行失败: {str(e)}")
         return {"success": False, "message": f"执行出错: {str(e)}", "tool": tool}
@@ -9821,12 +10704,10 @@ def main():
 
     # 1. 提取公共逻辑：无论进入哪个模式，都先进行一次环境校验
     if not config.validate():
-        print("[ERROR] 配置验证失败，请检查环境变量设置")
-        print("[INFO] 请确保 .env 文件包含以下必要配置：")
-        print("   - GITHUB_TOKEN=your_github_token")
-        print("   - DEEPSEEK_API_KEY=your_deepseek_api_key")
-        return
-    print("[OK] 环境配置验证通过")
+        print("[WARN] 未配置有效的 DEEPSEEK_API_KEY：AI 对话不可用，网页快捷按钮仍可正常使用")
+        print("[INFO] 在项目根目录 .env 写入 DEEPSEEK_API_KEY=sk-xxx 后重启 mcp.bat 即可")
+    else:
+        print("[OK] 环境配置验证通过")
 
     # 2. 根据命令行参数进行路由分发
     if len(sys.argv) > 1 and sys.argv[1] == "mcp":
@@ -9841,8 +10722,10 @@ def main():
     else:
         print("[WEB] 启动 FastMCP AI助手 Web 对话界面...")
         host_ip = socket.gethostbyname(socket.gethostname())
-        print(f"[INFO] 访问地址: http://{host_ip}:3000")
-        uvicorn.run(app='main_ai:app', host=host_ip, port=3000, reload=False)
+        print(f"[INFO] 本机访问地址: http://127.0.0.1:3000")
+        print(f"[INFO] 局域网访问地址: http://{host_ip}:3000")
+        # 监听 0.0.0.0，保证 127.0.0.1 与局域网 IP 都能打开
+        uvicorn.run(app='main_ai:app', host='0.0.0.0', port=3000, reload=False)
 
 @mcp.tool()
 async def generate_sumo_network(

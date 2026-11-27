@@ -4,3 +4,6 @@ aiohttp
 hutb\PythonAPI\carla\dist\hutb-2.9.16-cp310-cp310-win_amd64.whl
 fastmcp
 loguru
+python-dotenv
+python-multipart
+airsim

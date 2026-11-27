@@ -4,11 +4,15 @@
 """
 
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from typing import Optional
 
-# 加载环境变量
-load_dotenv()
+# 显式加载项目根目录与 llm/ 目录下的 .env，避免依赖启动时的工作目录
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_LLM_DIR = Path(__file__).resolve().parents[1]
+load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(_LLM_DIR / ".env")
 
 class Config:
     """配置类，包含所有应用程序设置"""
@@ -17,9 +21,10 @@ class Config:
     GITHUB_TOKEN: str = os.getenv("GITHUB_TOKEN", "")
     GITHUB_BASE_URL: str = os.getenv("GITHUB_BASE_URL", "https://api.github.com")
     
-    # Deepseek AI配置
-    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "sk-ee98515f3b6f4f89af52ec6d5e0ec19f")
+    # Deepseek AI配置（Key 请放在项目根目录 .env，不要写进代码）
+    DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
     DEEPSEEK_API_URL: str = os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions")
+    DEEPSEEK_MODEL: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
     
     # MCP服务器配置
     MCP_SERVER_NAME: str = os.getenv("MCP_SERVER_NAME", "github-search-mcp")

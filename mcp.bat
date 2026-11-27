@@ -6,6 +6,7 @@ setlocal enabledelayedexpansion
 REM Get script directory
 set "PROJECT_ROOT=%~dp0"
 set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
+cd /d "%PROJECT_ROOT%"
 
 REM Set virtual environment and Python paths
 set "VENV_PATH=%PROJECT_ROOT%\dependencies\prerequisites\miniconda3\envs\hutb_3.10"
@@ -21,7 +22,8 @@ REM Define port and URL to check
 for /f "tokens=16" %%i in ('ipconfig ^|find /i "ipv4"') do set host_ip=%%i
 echo IP:%host_ip%
 set "PORT=3000"
-set "CHECK_URL=http://%host_ip%:%PORT%"
+REM 服务已改为监听 0.0.0.0，本机健康检查用回环地址更可靠
+set "CHECK_URL=http://127.0.0.1:%PORT%"
 
 REM Maximum wait time in seconds for main_ai.py to start
 set "MAX_WAIT=60"
@@ -54,6 +56,14 @@ if not exist "%PROJECT_ROOT%\hutb" (
     REM 调用 hutb_downloader.exe，等待执行完成
     start /wait "" "%PROJECT_ROOT%\hutb_downloader.exe"
     echo Download and extraction completed.
+
+    REM 首次下载完成后也要启动模拟器（原来只在 else 分支启动）
+    if exist "%CARLA_EXE%" (
+        start "CarlaUE4" "%CARLA_EXE%"
+        timeout /t %POST_CARLA_WAIT% /nobreak >nul
+    ) else (
+        echo Warning: CarlaUE4.exe not found after download.
+    )
 ) else (
     echo hutb repository already exists.
     REM Check if CarlaUE4.exe exists
@@ -101,6 +111,26 @@ if not exist "%MAIN_AI_PY%" (
     echo Error: main_ai.py not found at %MAIN_AI_PY%
     pause
     exit /b 1
+)
+
+REM ===== 自动检查并安装 Python 依赖（缺失时才安装，可重复执行）=====
+echo Checking Python dependencies...
+"%PYTHON_EXE%" -c "import carla, fastapi, uvicorn, aiohttp, fastmcp, loguru, dotenv, multipart, lxml, scenariogeneration, pandas, cv2" >nul 2>&1
+if errorlevel 1 (
+    echo Installing Python dependencies, this may take a few minutes...
+    set "HTTP_PROXY="
+    set "HTTPS_PROXY="
+    "%PYTHON_EXE%" -m pip install -q --disable-pip-version-check -i https://pypi.tuna.tsinghua.edu.cn/simple "hutb\PythonAPI\carla\dist\hutb-2.10.1-cp310-cp310-win_amd64.whl" fastapi uvicorn aiohttp fastmcp loguru python-dotenv python-multipart lxml scenariogeneration pandas opencv-python
+    "%PYTHON_EXE%" -c "import carla, fastapi, uvicorn, aiohttp, fastmcp, loguru, dotenv, multipart, lxml, scenariogeneration, pandas, cv2" >nul 2>&1
+    if errorlevel 1 (
+        echo [ERROR] Python dependency installation failed. Please check the network and run:
+        echo   "%PYTHON_EXE%" -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple fastapi uvicorn aiohttp fastmcp loguru python-dotenv python-multipart lxml scenariogeneration pandas
+        pause
+        exit /b 1
+    )
+    echo Python dependencies installed successfully.
+) else (
+    echo Python dependencies already satisfied.
 )
 
 REM Print activation information

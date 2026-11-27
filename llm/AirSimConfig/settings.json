@@ -1,0 +1,6 @@
+{
+  "SettingsVersion": 1.2,
+  "SimMode": "Multirotor",
+  "ApiServerPort": 41451,
+  "LocalHostIp": "127.0.0.1"
+}
